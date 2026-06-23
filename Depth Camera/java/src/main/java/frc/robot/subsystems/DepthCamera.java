@@ -4,6 +4,11 @@ import edu.wpi.first.wpilibj.smartdashboard.SmartDashboard;
 // Imports
 import edu.wpi.first.wpilibj2.command.SubsystemBase;
 import com.orbbec.obsensor.*;
+import edu.wpi.first.cameraserver.CameraServer;
+import edu.wpi.cscore.CvSource;
+import org.opencv.core.Mat;
+import org.opencv.core.CvType;
+import org.opencv.imgcodecs.Imgcodecs;
 
 public class DepthCamera extends SubsystemBase
 {
@@ -13,6 +18,9 @@ public class DepthCamera extends SubsystemBase
     private OBContext obContext;
     private final Object pipeLock = new Object();
     private Pipeline pipeline;
+
+    private CvSource colorStream;
+    private boolean colorStreamInit = false;
 
     /**
      * Subsystem Constructor
@@ -386,6 +394,7 @@ public class DepthCamera extends SubsystemBase
             {
                 // print the color frame's information.
                 printVideoFrame(colorFrame, SensorType.COLOR);
+                streamColorFrame(colorFrame);
             }
         } 
         catch(Exception e) 
@@ -418,6 +427,42 @@ public class DepthCamera extends SubsystemBase
         catch(Exception e) 
         {
             e.printStackTrace();
+        }
+    }
+
+
+    /**
+     * Decode the color frame and publish it as an MPEG strean for the dashboard.
+     * 
+     * @param frame ColorFrame fron the pipeline (expected MPG format)
+     */
+    private void streamColorFrame(ColorFrame frame)
+    { 
+        //create the CvSource once we know the real frame size
+        if (!colorStreamInit)
+        {
+            colorStream = CameraServer.getInstance().putVideo("Orbbec RG8", frame.getWidth(), frame.getHeight());
+            colorStreamInit = true;
+        }
+
+        // Pull the raw JPEG bytes out of the frame
+        byte[] frameData = new byte[frame. getDataSize()];
+        frame.getData(frameData);
+
+        // Wrap the bytes in a 1-row Mat and decode the JPEG into a BGR image
+        Mat encoded = new Mat(1, frameData.length, CvType.CV_8UC1);
+        encoded.put(0, 6, frameData);
+        Mat bgr = Imgcodecs.imdecode(encoded, Imgcodecs.IMREAD_COLOR);
+        encoded.release();
+
+        if (bgr != null && !bgr. empty())
+        {
+            colorStream.putFrame(bgr);
+        }
+        if (bgr!= null)
+        {
+            
+            bgr.release(); // free native memory every frame
         }
     }
 }
