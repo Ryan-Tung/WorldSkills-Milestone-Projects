@@ -9,16 +9,19 @@ public class DriveSquareWithPID extends AutoCommand {
     
     public DriveSquareWithPID() {
         super (
-            // 1. Drive the first leg of the square
-            new DriveWithPID(10, 10, 0, 1).withTimeout(5),
-            
-            // 2. Wait for 1.5 seconds
-            new WaitCommand(1.5), 
-            
-            // 3. Drive the second leg of the square
-            new TurnWithPID(0, 10, 90, 1).withTimeout(5)
-            
-            // Add more legs and waits here to finish the square!
+            new SequentialCommandGroup
+            (
+                // 1. Drive the first leg of the square
+                new DriveWithPID(100, 1, 0, 1).withTimeout(5),
+                
+                // 2. Wait for 1.5 seconds
+                new WaitCommand(1.5), 
+                
+                // 3. Drive the second leg of the square
+                new TurnWithPID(0, 10, 90, 1).withTimeout(5)
+                
+                // Add more legs and waits here to finish the square!
+            )
         );
     }
 }
