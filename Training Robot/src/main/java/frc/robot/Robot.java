@@ -16,6 +16,7 @@ import frc.robot.commands.auto.AutoCommand;
 import frc.robot.commands.auto.DriveForward;
 import frc.robot.commands.auto.DriveForwardWithPID;
 import frc.robot.commands.auto.DriveSquareWithPID;
+import frc.robot.commands.auto.DriveAroundObstacleWithPID;
 
 /**
  * The VM is configured to automatically run this class, and to call the functions corresponding to
@@ -67,6 +68,8 @@ public class Robot extends TimedRobot {
     RobotContainer.autoMode.put("Drive Forward", new DriveForward());
     addAutoMode(RobotContainer.autoChooser, "Drive Forward with PID", new DriveForwardWithPID());
     addAutoMode(RobotContainer.autoChooser, "Drive Square with PID", new DriveSquareWithPID());
+    // Example: Box is 45 units away, measures 30 units in size, and you want to drive 100 units after it.
+    addAutoMode(RobotContainer.autoChooser, "Drive Around Obstacle with PID", new DriveAroundObstacleWithPID(450.0, 60.0, 100.0));
 
     SmartDashboard.putData(RobotContainer.autoChooser);
   }
