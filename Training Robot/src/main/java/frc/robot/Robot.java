@@ -69,7 +69,7 @@ public class Robot extends TimedRobot {
     addAutoMode(RobotContainer.autoChooser, "Drive Forward with PID", new DriveForwardWithPID());
     addAutoMode(RobotContainer.autoChooser, "Drive Square with PID", new DriveSquareWithPID());
     // Example: Box is 45 units away, measures 30 units in size, and you want to drive 100 units after it.
-    addAutoMode(RobotContainer.autoChooser, "Drive Around Obstacle with PID", new DriveAroundObstacleWithPID(450.0, 60.0, 100.0));
+    addAutoMode(RobotContainer.autoChooser, "Drive Around Obstacle with PID", new DriveAroundObstacleWithPID(450.0, 400.0, 100.0));
 
     SmartDashboard.putData(RobotContainer.autoChooser);
   }

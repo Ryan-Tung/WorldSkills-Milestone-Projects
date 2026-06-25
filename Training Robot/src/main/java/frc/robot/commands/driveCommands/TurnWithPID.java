@@ -29,7 +29,7 @@ public class TurnWithPID extends CommandBase
         pidYAxis.setTolerance(epsilonDistance);
 
         // pidZAxis = new PIDController(20, 0, 0);
-        pidZAxis = new PIDController(0.05, 0.0, 0);
+        pidZAxis = new PIDController(0.01, 0, 0);
 
         pidZAxis.setTolerance(epsilonYaw);
     }
@@ -47,7 +47,7 @@ public class TurnWithPID extends CommandBase
     public void execute()
     {
         drive.holonomicDrive(0.0,
-         MathUtil.clamp(pidYAxis.calculate(drive.getAverageForwardEncoderDistance(), setpointDistance), -0.5, 0.5),
+         0.0,
          MathUtil.clamp(pidZAxis.calculate(drive.getYaw(), setpointYaw), -1, 1));
          SmartDashboard.putNumber("Yaw", drive.getYaw());
     }
