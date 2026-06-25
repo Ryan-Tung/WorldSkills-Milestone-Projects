@@ -25,7 +25,7 @@ public class DriveWithPID extends CommandBase
         this.setpointYaw = setpointYaw;
         addRequirements(drive);
 
-        pidYAxis = new PIDController(1, 0, 0);
+        pidYAxis = new PIDController(0.05, 0, 0);
         pidYAxis.setTolerance(epsilonDistance);
 
         // pidZAxis = new PIDController(20, 0, 0);
