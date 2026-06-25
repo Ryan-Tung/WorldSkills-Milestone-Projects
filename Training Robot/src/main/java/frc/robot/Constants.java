@@ -21,9 +21,9 @@ public final class Constants
         /**
          * Motors
          */
-        public static final int M0                      = 0; //Right Motor
-        public static final int M1                      = 1; //Back Motor
-        public static final int M3                      = 3; //Left Motor
+        public static final int M0                      = 1; //Right Motor
+        public static final int M1                      = 0; //Back Motor
+        public static final int M3                      = 2; //Left Motor
 
         /**
          * Encoders

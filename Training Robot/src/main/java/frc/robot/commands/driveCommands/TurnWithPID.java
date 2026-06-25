@@ -7,7 +7,7 @@ import edu.wpi.first.wpiutil.math.MathUtil;
 import frc.robot.RobotContainer;
 import frc.robot.subsystems.DriveTrain;
 
-public class DriveWithPID extends CommandBase
+public class TurnWithPID extends CommandBase
 {
     //Bring in the Drive Train subsystem
     private static final DriveTrain drive = RobotContainer.driveTrain;
@@ -19,13 +19,13 @@ public class DriveWithPID extends CommandBase
     PIDController pidYAxis;
     PIDController pidZAxis;
 
-    public DriveWithPID(double setpointDistance, double epsilonDistance, double setpointYaw, double epsilonYaw)
+    public TurnWithPID(double setpointDistance, double epsilonDistance, double setpointYaw, double epsilonYaw)
     {
         this.setpointDistance = setpointDistance;
         this.setpointYaw = setpointYaw;
         addRequirements(drive);
 
-        pidYAxis = new PIDController(0, 0, 0);
+        // pidYAxis = new PIDController(1, 0, 0);
         pidYAxis.setTolerance(epsilonDistance);
 
         // pidZAxis = new PIDController(20, 0, 0);

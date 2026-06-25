@@ -43,7 +43,7 @@ public class DriveTrain extends SubsystemBase
                                                     .getEntry();
     private NetworkTableEntry backEncoderValue = tab.add("Back Encoder", 0)
                                                     .getEntry();
-    private NetworkTableEntry gyroValue = tab.add("NavX Yaw", 0)
+    private NetworkTableEntry gyroValue = tab.add("NavX Heading", 0)
                                                     .getEntry();
 
     public DriveTrain ()

@@ -10,6 +10,12 @@ import org.opencv.core.Mat;
 import org.opencv.core.CvType;
 import org.opencv.imgcodecs.Imgcodecs;
 
+//FORFUN IMPORTS
+import org.opencv.imgproc.Imgproc;
+import org.opencv.core.Point;
+import org.opencv.core.Scalar;
+//END FUN
+
 public class DepthCamera extends SubsystemBase
 {
     /**
@@ -394,7 +400,10 @@ public class DepthCamera extends SubsystemBase
             {
                 // print the color frame's information.
                 printVideoFrame(colorFrame, SensorType.COLOR);
+                //test challengeend
                 streamColorFrame(colorFrame);
+                //test challenge
+                // grabFrame(colorFrame);            
             }
         } 
         catch(Exception e) 
@@ -455,14 +464,67 @@ public class DepthCamera extends SubsystemBase
         Mat bgr = Imgcodecs.imdecode(encoded, Imgcodecs.IMREAD_COLOR);
         encoded.release();
 
-        if (bgr != null && !bgr. empty())
+        //NOT FUN COMMENTED
+        // if (bgr != null && !bgr. empty())
+        // {
+        //     colorStream.putFrame(bgr);
+        // }
+        //FOR FUN
+        if (bgr != null && !bgr.empty())
         {
+            // 1. Find the exact center point of the frame
+            Point center = new Point(bgr.cols() / 2.0, bgr.rows() / 2.0);
+            
+            // 2. Define the color white using BGR (Blue, Green, Red) format
+            Scalar white = new Scalar(255, 255, 255);
+            
+            // 3. Draw an OpenCV star marker at the center
+            // Arguments: (target_matrix, position, color, type, size_in_pixels, thickness)
+            Imgproc.drawMarker(bgr, center, white, Imgproc.MARKER_STAR, 30, 2);
+
+            // 4. Send the newly marked frame to your dashboard stream
             colorStream.putFrame(bgr);
         }
+        //FUN END
         if (bgr!= null)
         {
             
             bgr.release(); // free native memory every frame
         }
     }
+    /**
+     * Grabs a color frame, decodes it, and saves it to the desktop as a PNG.
+     * * @param frame ColorFrame from the pipeline
+     */
+    //TEST CODE
+    private void grabFrame(ColorFrame frame)
+    {
+        if (frame == null) return;
+
+        // 1. Pull the raw JPEG bytes out of the frame
+        byte[] frameData = new byte[frame.getDataSize()];
+        frame.getData(frameData);
+
+        // 2. Wrap and decode the JPEG into an OpenCV Mat image
+        Mat encoded = new Mat(1, frameData.length, CvType.CV_8UC1);
+        encoded.put(0, 0, frameData); 
+        Mat bgr = Imgcodecs.imdecode(encoded, Imgcodecs.IMREAD_COLOR);
+        encoded.release();
+
+        if (bgr != null && !bgr.empty())
+        {
+            // 3. Dynamically find your computer's Desktop path
+            String desktopPath = "C:\\Users\\perso\\Desktop\\1234.png";
+            SmartDashboard.putString("filepath", desktopPath);
+            // 4. Save the file
+            boolean success = Imgcodecs.imwrite(desktopPath, bgr);
+            
+            if (!success) {
+                System.out.println("Failed to save frame! (If on a RoboRIO, the Desktop directory does not exist).");
+            }
+
+            bgr.release(); // Free memory
+        }
+    }
+    //TEST CODE END
 }
