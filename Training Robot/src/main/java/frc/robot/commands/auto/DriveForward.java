@@ -7,7 +7,7 @@ public class DriveForward extends AutoCommand
     public DriveForward ()
     {
         // super(new SimpleDrive(0.0, 0.0, 1).withTimeout(2));
-        super(new SimpleDrive(0.0, 0.5, 0.0).withTimeout(5));
+        super(new SimpleDrive(0.5, 0.0, -0.05).withTimeout(5));
 
     }
 }
