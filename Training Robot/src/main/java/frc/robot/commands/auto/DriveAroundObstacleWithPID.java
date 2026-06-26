@@ -33,10 +33,10 @@ public class DriveAroundObstacleWithPID extends AutoCommand {
     
     // Timeouts (Measured in Seconds)
     private static final double WAIT_TIME = 0.25;
-    private static final double FIRST_CLEAR_TIMEOUT = 2;   // Time to clear robot width
-    private static final double FORWARD_DRIVE_TIMEOUT = 1.5; // Time to drive past box length
+    private static final double FIRST_CLEAR_TIMEOUT = 2.5;   // Time to clear robot width
+    private static final double FORWARD_DRIVE_TIMEOUT = 1.3; // Time to drive past box length
     private static final double SECOND_CLEAR_TIMEOUT = 1.5;  // Time to clear front corner of box
-    private static final double RETURN_LINE_TIMEOUT = 2.0;   // Time to crab walk back to centerline
+    private static final double RETURN_LINE_TIMEOUT = 3;   // Time to crab walk back to centerline
     private static final double FINAL_DRIVE_TIMEOUT = 5.0;    // Final straight away duration
     // =========================================================================
 
