@@ -29,7 +29,7 @@ public class TurnWithPID extends CommandBase
         pidYAxis.setTolerance(epsilonDistance);
 
         // pidZAxis = new PIDController(20, 0, 0);
-        pidZAxis = new PIDController(0.01, 0, 0);
+        pidZAxis = new PIDController(0.03, 0.0, 0);
 
         pidZAxis.setTolerance(epsilonYaw);
     }

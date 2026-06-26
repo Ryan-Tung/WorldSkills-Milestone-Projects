@@ -146,7 +146,7 @@ public class DriveTrain extends SubsystemBase
      */
     public double getLeftEncoderDistance()
     {
-        return leftEncoder.getEncoderDistance();
+        return leftEncoder.getEncoderDistance()* -1;
     }
 
     /**
