@@ -62,6 +62,6 @@ public class TurnWithPID extends CommandBase
     public boolean isFinished()
     {
         // return pidYAxis.atSetpoint();
-        return pidYAxis.atSetpoint() && pidZAxis.atSetpoint();
+        return pidZAxis.atSetpoint();
     }
 }

@@ -63,6 +63,6 @@ public class DriveWithPID extends CommandBase
     public boolean isFinished()
     {
         // return pidYAxis.atSetpoint();
-        return pidYAxis.atSetpoint() && pidZAxis.atSetpoint();
+        return pidYAxis.atSetpoint();
     }
 }
