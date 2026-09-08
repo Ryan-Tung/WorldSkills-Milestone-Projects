@@ -4,6 +4,7 @@ import com.studica.frc.Lidar;
 
 import edu.wpi.first.wpilibj.smartdashboard.SmartDashboard;
 import edu.wpi.first.wpilibj2.command.SubsystemBase;
+import edu.wpi.first.networktables.NetworkTableInstance;
 
 public class LidarTest extends SubsystemBase
 {
@@ -21,7 +22,7 @@ public class LidarTest extends SubsystemBase
          * Top USB 2.0 port of VMX = kUSB1
          * Bottom USB 2.0 port of VMX = kUSB2
          */
-        lidar = new Lidar(Lidar.Port.kUSB1); //Lidar will start spinning the moment this is called
+        lidar = new Lidar(Lidar.Port.kUSB2); //Lidar will start spinning the moment this is called
 
         // Configure filters
         lidar.clusterConfig(50.0f, 5);
@@ -31,7 +32,7 @@ public class LidarTest extends SubsystemBase
         // lidar.jitterConfig(50.0f);
 
         // Enable Filter
-        lidar.enableFilter(Lidar.Filter.kCLUSTER, true);
+        lidar.enableFilter(Lidar.Filter.kCLUSTER, false);
     }
 
     /**
@@ -53,15 +54,20 @@ public class LidarTest extends SubsystemBase
     }
 
     @Override
-    public void periodic ()
-    {
-        if (scanning)
-        {
-            //Update scanData class
-            scanData = lidar.getData();
-            //Print out Angle and distance at 60 degrees
-            SmartDashboard.putNumber("Angle",  scanData.angle[60]);
-            SmartDashboard.putNumber("Distance", scanData.distance[60]);
+    public void periodic() {
+        if (scanning && scanData != null && scanData.distance != null) {
+            // Interleave angles and distances into a single array
+            double[] payload = new double[scanData.distance.length * 2];
+            for (int i = 0; i < scanData.distance.length; i++) {
+                payload[i * 2] = scanData.angle[i];
+                payload[i * 2 + 1] = scanData.distance[i];
+            }
+            
+            // Publish to /Lidar/ScanData entry
+            NetworkTableInstance.getDefault()
+                .getTable("Lidar")
+                .getEntry("ScanData")
+                .setDoubleArray(payload);
         }
     }
 }

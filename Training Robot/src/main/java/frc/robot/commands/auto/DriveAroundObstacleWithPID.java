@@ -3,6 +3,7 @@ package frc.robot.commands.auto;
 import edu.wpi.first.wpilibj2.command.SequentialCommandGroup;
 import edu.wpi.first.wpilibj2.command.WaitCommand;
 import frc.robot.commands.driveCommands.TurnWithPID;
+import frc.robot.subsystems.NetPrinter_v2;
 import frc.robot.commands.driveCommands.SimpleDrive; 
 import frc.robot.commands.driveCommands.DriveWithPID; 
 import edu.wpi.first.wpilibj.AnalogInput;
@@ -50,6 +51,8 @@ public class DriveAroundObstacleWithPID extends AutoCommand {
      */
     public DriveAroundObstacleWithPID() {
         super(new SequentialCommandGroup());
+        NetPrinter_v2.printf("LidarLog", "LIDAR INIT ERROR: HI!!!!");
+
 
         addCommands(
             // Step 1: Run straight toward the box until the sensor detects it within range
