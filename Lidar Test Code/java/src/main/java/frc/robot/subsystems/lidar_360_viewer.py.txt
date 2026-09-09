@@ -18,17 +18,79 @@ logging.basicConfig(level=logging.WARNING)
 
 ROBOT_IP = '10.12.34.2'
 
-MAX_DISTANCE_METERS = 5.0
+# ------------------------------------------------------------
+# LiDAR
+# ------------------------------------------------------------
 
-# Maximum distance between neighbouring LiDAR points
-# before we consider them to be different objects.
+MAX_DISTANCE_METERS = 5.0
+MIN_DISTANCE_METERS = 0.05
+
+# Maximum distance between consecutive LiDAR points
+# before they are treated as a separate surface.
 CONNECT_DISTANCE = 0.30
 
-# Ignore very close readings
-MIN_DISTANCE = 0.05
+# Maximum number of points used for mapping each scan.
+# Reducing this improves performance.
+MAX_SCAN_POINTS = 360
 
-# Maximum number of line segments to display
-MAX_SEGMENTS = 1000
+
+# ------------------------------------------------------------
+# MAP
+# ------------------------------------------------------------
+
+MAP_SIZE_METERS = 20.0
+GRID_RESOLUTION = 0.05       # 5 cm per cell
+
+MAP_CELLS = int(
+    MAP_SIZE_METERS / GRID_RESOLUTION
+)
+
+# Log-odds occupancy values
+FREE_UPDATE = -0.25
+OCCUPIED_UPDATE = 0.85
+
+LOG_ODDS_MIN = -5.0
+LOG_ODDS_MAX = 5.0
+
+
+# ------------------------------------------------------------
+# ROBOT POSE / LOCALISATION
+# ------------------------------------------------------------
+#
+# CHANGE THESE TO MATCH YOUR ROBOT'S ACTUAL
+# NETWORKTABLES STRUCTURE.
+#
+# Example expected values:
+#
+# X = metres
+# Y = metres
+# Heading = degrees
+#
+# Heading convention used here:
+#
+#       0°
+#        ↑
+#        |
+#  90° ← ● → -90°
+#        |
+#       180°
+#
+# Positive heading = clockwise
+#
+# ------------------------------------------------------------
+
+POSE_TABLE_NAME = "Drive"
+
+POSE_X_KEY = "PoseX"
+POSE_Y_KEY = "PoseY"
+POSE_HEADING_KEY = "PoseHeading"
+
+
+# ------------------------------------------------------------
+# LOCAL OBSTACLE WARNING
+# ------------------------------------------------------------
+
+OBSTACLE_WARNING_DISTANCE = 0.75
 
 
 # ============================================================
@@ -38,19 +100,45 @@ MAX_SEGMENTS = 1000
 data_lock = threading.Lock()
 
 
-# Latest scan parts
+# ============================================================
+# NETWORK TABLE DATA
+# ============================================================
+
 angles_1 = np.array([])
 distances_1 = np.array([])
 
 angles_2 = np.array([])
 distances_2 = np.array([])
 
-latest_angles = np.array([])
-latest_distances = np.array([])
+
+# Latest robot pose
+robot_x = 0.0
+robot_y = 0.0
+robot_heading = 0.0
+
+
+# Used to detect new scans
+scan_update_counter = 0
+last_mapped_scan = -1
 
 
 # ============================================================
-# NETWORKTABLES CALLBACK
+# GLOBAL MAP
+# ============================================================
+
+occupancy_grid = np.zeros(
+    (MAP_CELLS, MAP_CELLS),
+    dtype=np.float32
+)
+
+
+# Robot trajectory
+robot_path_x = []
+robot_path_y = []
+
+
+# ============================================================
+# NETWORKTABLE CALLBACK
 # ============================================================
 
 def value_changed_callback(table, key, value, isNew):
@@ -59,83 +147,373 @@ def value_changed_callback(table, key, value, isNew):
     global distances_1
     global angles_2
     global distances_2
-    global latest_angles
-    global latest_distances
+
+    global robot_x
+    global robot_y
+    global robot_heading
+
+    global scan_update_counter
 
     with data_lock:
 
-        value = np.asarray(value, dtype=float)
+        # ----------------------------------------------------
+        # LiDAR
+        # ----------------------------------------------------
 
         if key == 'ScanAngles_Part1':
-            angles_1 = value
+            angles_1 = np.asarray(value, dtype=float)
 
         elif key == 'ScanDistances_Part1':
-            distances_1 = value
+            distances_1 = np.asarray(value, dtype=float)
 
         elif key == 'ScanAngles_Part2':
-            angles_2 = value
+            angles_2 = np.asarray(value, dtype=float)
 
         elif key == 'ScanDistances_Part2':
-            distances_2 = value
+            distances_2 = np.asarray(value, dtype=float)
+
+            # Treat Part 2 distance update as completion
+            # of one scan.
+            scan_update_counter += 1
+
 
         # ----------------------------------------------------
-        # Combine the two halves of the scan
+        # ROBOT POSE
         # ----------------------------------------------------
 
-        if len(angles_1) > 0 and len(distances_1) > 0:
+        elif key == POSE_X_KEY:
+            robot_x = float(value)
 
-            n1 = min(len(angles_1), len(distances_1))
+        elif key == POSE_Y_KEY:
+            robot_y = float(value)
 
-        else:
-            n1 = 0
-
-        if len(angles_2) > 0 and len(distances_2) > 0:
-
-            n2 = min(len(angles_2), len(distances_2))
-
-        else:
-            n2 = 0
-
-        if n1 > 0 or n2 > 0:
-
-            combined_angles = np.concatenate([
-                angles_1[:n1],
-                angles_2[:n2]
-            ])
-
-            combined_distances = np.concatenate([
-                distances_1[:n1],
-                distances_2[:n2]
-            ])
-
-            # Remove invalid readings
-            valid = np.isfinite(combined_angles) & np.isfinite(combined_distances)
-
-            combined_angles = combined_angles[valid]
-            combined_distances = combined_distances[valid]
-
-            # Sort by angle so neighbouring points are spatially adjacent
-            order = np.argsort(combined_angles)
-
-            latest_angles = combined_angles[order]
-            latest_distances = combined_distances[order]
+        elif key == POSE_HEADING_KEY:
+            robot_heading = float(value)
 
 
 # ============================================================
-# BUILD ENVIRONMENT SEGMENTS
+# GET COMPLETE LIDAR SCAN
 # ============================================================
 
-def build_segments(angles_deg, distances_mm):
+def get_combined_scan():
+
+    with data_lock:
+
+        a1 = angles_1.copy()
+        d1 = distances_1.copy()
+
+        a2 = angles_2.copy()
+        d2 = distances_2.copy()
+
+    # --------------------------------------------------------
+    # Validate parts
+    # --------------------------------------------------------
+
+    n1 = min(len(a1), len(d1))
+    n2 = min(len(a2), len(d2))
+
+    if n1 == 0 and n2 == 0:
+        return np.array([]), np.array([])
+
+    angles = np.concatenate([
+        a1[:n1],
+        a2[:n2]
+    ])
+
+    distances = np.concatenate([
+        d1[:n1],
+        d2[:n2]
+    ])
+
+    # --------------------------------------------------------
+    # Remove invalid measurements
+    # --------------------------------------------------------
+
+    valid = (
+        np.isfinite(angles)
+        & np.isfinite(distances)
+    )
+
+    angles = angles[valid]
+    distances = distances[valid]
+
+    # --------------------------------------------------------
+    # Sort by angle
+    # --------------------------------------------------------
+
+    order = np.argsort(angles)
+
+    angles = angles[order]
+    distances = distances[order]
+
+    return angles, distances
+
+
+# ============================================================
+# COORDINATE CONVERSION
+# ============================================================
+
+def lidar_to_local(angles_deg, distances_mm):
+
+    distances_m = distances_mm / 1000.0
+
+    # 0° = forward
+    #
+    # Positive X = right
+    # Positive Y = forward
+
+    angles_rad = np.radians(angles_deg)
+
+    local_x = (
+        distances_m
+        * np.sin(angles_rad)
+    )
+
+    local_y = (
+        distances_m
+        * np.cos(angles_rad)
+    )
+
+    return local_x, local_y
+
+
+# ============================================================
+# LOCAL → GLOBAL COORDINATES
+# ============================================================
+
+def local_to_global(
+    local_x,
+    local_y,
+    x_robot,
+    y_robot,
+    heading_deg
+):
+
+    heading = np.radians(heading_deg)
+
+    # Heading is defined clockwise from forward (+Y)
+    #
+    # Forward vector:
+    #     (sin(h), cos(h))
+    #
+    # Right vector:
+    #     (cos(h), -sin(h))
+
+    global_x = (
+        x_robot
+        + local_x * np.cos(heading)
+        + local_y * np.sin(heading)
+    )
+
+    global_y = (
+        y_robot
+        - local_x * np.sin(heading)
+        + local_y * np.cos(heading)
+    )
+
+    return global_x, global_y
+
+
+# ============================================================
+# WORLD → GRID
+# ============================================================
+
+def world_to_grid(x, y):
+
+    map_min = -MAP_SIZE_METERS / 2
+
+    grid_x = (
+        (x - map_min)
+        / GRID_RESOLUTION
+    ).astype(int)
+
+    grid_y = (
+        (y - map_min)
+        / GRID_RESOLUTION
+    ).astype(int)
+
+    return grid_x, grid_y
+
+
+# ============================================================
+# GRID VALIDATION
+# ============================================================
+
+def valid_grid_cell(x, y):
+
+    return (
+        0 <= x < MAP_CELLS
+        and
+        0 <= y < MAP_CELLS
+    )
+
+
+# ============================================================
+# BRESENHAM LINE
+# ============================================================
+
+def bresenham(x0, y0, x1, y1):
+
+    points = []
+
+    dx = abs(x1 - x0)
+    dy = abs(y1 - y0)
+
+    sx = 1 if x0 < x1 else -1
+    sy = 1 if y0 < y1 else -1
+
+    err = dx - dy
+
+    while True:
+
+        points.append((x0, y0))
+
+        if x0 == x1 and y0 == y1:
+            break
+
+        e2 = 2 * err
+
+        if e2 > -dy:
+
+            err -= dy
+            x0 += sx
+
+        if e2 < dx:
+
+            err += dx
+            y0 += sy
+
+    return points
+
+
+# ============================================================
+# UPDATE OCCUPANCY MAP
+# ============================================================
+
+def update_occupancy_map(
+    local_x,
+    local_y,
+    x_robot,
+    y_robot,
+    heading
+):
+
+    global occupancy_grid
+
+    # --------------------------------------------------------
+    # Convert LiDAR points to world coordinates
+    # --------------------------------------------------------
+
+    world_x, world_y = local_to_global(
+        local_x,
+        local_y,
+        x_robot,
+        y_robot,
+        heading
+    )
+
+    # Robot's grid position
+    robot_grid_x, robot_grid_y = world_to_grid(
+        np.array([x_robot]),
+        np.array([y_robot])
+    )
+
+    robot_grid_x = int(robot_grid_x[0])
+    robot_grid_y = int(robot_grid_y[0])
+
+    if not valid_grid_cell(
+        robot_grid_x,
+        robot_grid_y
+    ):
+        return
+
+
+    # --------------------------------------------------------
+    # Convert obstacle endpoints to grid coordinates
+    # --------------------------------------------------------
+
+    obstacle_grid_x, obstacle_grid_y = world_to_grid(
+        world_x,
+        world_y
+    )
+
+
+    # --------------------------------------------------------
+    # Raycast every LiDAR beam
+    # --------------------------------------------------------
+
+    for gx, gy in zip(
+        obstacle_grid_x,
+        obstacle_grid_y
+    ):
+
+        if not valid_grid_cell(gx, gy):
+            continue
+
+        # Find cells between robot and obstacle
+        ray = bresenham(
+            robot_grid_x,
+            robot_grid_y,
+            int(gx),
+            int(gy)
+        )
+
+        if len(ray) < 2:
+            continue
+
+        # ----------------------------------------------------
+        # Mark cells along ray as FREE
+        # ----------------------------------------------------
+
+        for cell_x, cell_y in ray[:-1]:
+
+            if valid_grid_cell(
+                cell_x,
+                cell_y
+            ):
+
+                occupancy_grid[
+                    cell_y,
+                    cell_x
+                ] += FREE_UPDATE
+
+
+        # ----------------------------------------------------
+        # Final cell = obstacle
+        # ----------------------------------------------------
+
+        occupancy_grid[
+            gy,
+            gx
+        ] += OCCUPIED_UPDATE
+
+
+    # Keep values bounded
+    np.clip(
+        occupancy_grid,
+        LOG_ODDS_MIN,
+        LOG_ODDS_MAX,
+        out=occupancy_grid
+    )
+
+
+# ============================================================
+# BUILD LOCAL OBSTACLE SEGMENTS
+# ============================================================
+
+def build_segments(
+    angles_deg,
+    distances_mm
+):
 
     if len(angles_deg) < 2:
         return []
 
     distances_m = distances_mm / 1000.0
 
-    # Valid distance range
     valid = (
         np.isfinite(distances_m)
-        & (distances_m > MIN_DISTANCE)
+        & (distances_m > MIN_DISTANCE_METERS)
         & (distances_m <= MAX_DISTANCE_METERS)
     )
 
@@ -145,114 +523,305 @@ def build_segments(angles_deg, distances_mm):
     if len(angles_deg) < 2:
         return []
 
-    # --------------------------------------------------------
-    # Convert to Cartesian coordinates
-    #
-    # 0 degrees = forward
-    # Positive angle = clockwise
-    # --------------------------------------------------------
+    # Reduce points for rendering
+    if len(angles_deg) > MAX_SCAN_POINTS:
 
-    angles_rad = np.radians(angles_deg)
+        indices = np.linspace(
+            0,
+            len(angles_deg) - 1,
+            MAX_SCAN_POINTS
+        ).astype(int)
 
-    x = distances_m * np.sin(angles_rad)
-    y = distances_m * np.cos(angles_rad)
+        angles_deg = angles_deg[indices]
+        distances_m = distances_m[indices]
 
-    points = np.column_stack((x, y))
+
+    local_x, local_y = lidar_to_local(
+        angles_deg,
+        distances_m * 1000
+    )
+
+    points = np.column_stack([
+        local_x,
+        local_y
+    ])
 
     segments = []
-
-    # --------------------------------------------------------
-    # Connect only nearby points.
-    #
-    # This is the important part:
-    # large gaps become breaks in the environment.
-    # --------------------------------------------------------
 
     for i in range(len(points) - 1):
 
         p1 = points[i]
         p2 = points[i + 1]
 
-        distance_between_points = np.linalg.norm(p2 - p1)
+        gap = np.linalg.norm(
+            p2 - p1
+        )
 
-        if distance_between_points <= CONNECT_DISTANCE:
+        if gap <= CONNECT_DISTANCE:
 
-            segments.append([p1, p2])
+            segments.append([
+                p1,
+                p2
+            ])
 
     return segments
 
 
 # ============================================================
-# UPDATE DISPLAY
+# MAP DISPLAY UPDATE
+# ============================================================
+
+def update_map_display():
+
+    # Occupancy probability
+    probability = (
+        1
+        -
+        1 /
+        (
+            1
+            + np.exp(
+                occupancy_grid
+            )
+        )
+    )
+
+    map_image.set_data(
+        probability
+    )
+
+
+# ============================================================
+# MAIN PLOT UPDATE
 # ============================================================
 
 def update_plot(frame):
 
+    global last_mapped_scan
+
+    # --------------------------------------------------------
+    # Get current data
+    # --------------------------------------------------------
+
     with data_lock:
 
-        angles = latest_angles.copy()
-        distances = latest_distances.copy()
+        current_x = robot_x
+        current_y = robot_y
+        current_heading = robot_heading
 
-    if len(angles) < 2:
+        current_scan_counter = scan_update_counter
 
-        environment_lines.set_segments([])
-        environment_glow.set_segments([])
+    angles, distances = get_combined_scan()
+
+
+    # --------------------------------------------------------
+    # Nothing received yet
+    # --------------------------------------------------------
+
+    if len(angles) == 0:
 
         return (
-            environment_lines,
-            environment_glow,
-            scan_points,
+            local_environment,
+            local_environment_glow,
+            local_scan_points,
+            robot_marker,
+            robot_direction,
+            robot_path,
+            global_robot_marker
         )
 
-    # --------------------------------------------------------
-    # Convert to Cartesian coordinates
-    # --------------------------------------------------------
+
+    # ========================================================
+    # LOCAL LiDAR DISPLAY
+    # ========================================================
 
     distances_m = distances / 1000.0
 
     valid = (
         np.isfinite(angles)
         & np.isfinite(distances_m)
-        & (distances_m > MIN_DISTANCE)
+        & (distances_m > MIN_DISTANCE_METERS)
         & (distances_m <= MAX_DISTANCE_METERS)
     )
 
-    angles_valid = angles[valid]
-    distances_valid = distances_m[valid]
+    valid_angles = angles[valid]
+    valid_distances = distances_m[valid]
 
-    angles_rad = np.radians(angles_valid)
-
-    x = distances_valid * np.sin(angles_rad)
-    y = distances_valid * np.cos(angles_rad)
-
-    point_data = np.column_stack((x, y))
-
-    # Update raw scan points
-    scan_points.set_offsets(point_data)
-
-    # --------------------------------------------------------
-    # Build connected environment
-    # --------------------------------------------------------
-
-    segments = build_segments(
-        angles_valid,
-        distances_valid * 1000.0
+    local_x, local_y = lidar_to_local(
+        valid_angles,
+        valid_distances * 1000
     )
 
-    if len(segments) > MAX_SEGMENTS:
 
-        segments = segments[:MAX_SEGMENTS]
+    # Update scan points
+    local_scan_points.set_offsets(
+        np.column_stack([
+            local_x,
+            local_y
+        ])
+    )
 
-    # Main environment lines
-    environment_lines.set_segments(segments)
 
-    # Glow underneath the lines
-    environment_glow.set_segments(segments)
+    # Update connected surfaces
+
+    segments = build_segments(
+        valid_angles,
+        valid_distances * 1000
+    )
+
+    local_environment.set_segments(
+        segments
+    )
+
+    local_environment_glow.set_segments(
+        segments
+    )
+
+
+    # ========================================================
+    # UPDATE GLOBAL MAP
+    # ========================================================
+
+    if current_scan_counter != last_mapped_scan:
+
+        last_mapped_scan = current_scan_counter
+
+        # Downsample mapping scan
+        if len(local_x) > MAX_SCAN_POINTS:
+
+            indices = np.linspace(
+                0,
+                len(local_x) - 1,
+                MAX_SCAN_POINTS
+            ).astype(int)
+
+            map_local_x = local_x[indices]
+            map_local_y = local_y[indices]
+
+        else:
+
+            map_local_x = local_x
+            map_local_y = local_y
+
+
+        update_occupancy_map(
+            map_local_x,
+            map_local_y,
+            current_x,
+            current_y,
+            current_heading
+        )
+
+        update_map_display()
+
+
+    # ========================================================
+    # UPDATE ROBOT TRAJECTORY
+    # ========================================================
+
+    robot_path_x.append(current_x)
+    robot_path_y.append(current_y)
+
+    # Prevent excessive trajectory storage
+    if len(robot_path_x) > 5000:
+
+        del robot_path_x[:-5000]
+        del robot_path_y[:-5000]
+
+
+    robot_path.set_data(
+        robot_path_x,
+        robot_path_y
+    )
+
+
+    # ========================================================
+    # ROBOT LOCAL VIEW
+    # ========================================================
+
+    robot_marker.set_data(
+        [0],
+        [0]
+    )
+
+    heading = np.radians(
+        current_heading
+    )
+
+    direction_length = 0.5
+
+    direction_x = (
+        direction_length
+        * np.sin(heading)
+    )
+
+    direction_y = (
+        direction_length
+        * np.cos(heading)
+    )
+
+    robot_direction.set_data(
+        [0, direction_x],
+        [0, direction_y]
+    )
+
+
+    # ========================================================
+    # GLOBAL ROBOT LOCATION
+    # ========================================================
+
+    global_robot_marker.set_data(
+        [current_x],
+        [current_y]
+    )
+
+
+    # ========================================================
+    # STATUS
+    # ========================================================
+
+    status_text.set_text(
+        f"● LIVE    "
+        f"X: {current_x:.2f} m    "
+        f"Y: {current_y:.2f} m    "
+        f"Heading: {current_heading:.1f}°"
+    )
+
+
+    # ========================================================
+    # OBSTACLE WARNING
+    # ========================================================
+
+    close_obstacles = (
+        valid_distances
+        <
+        OBSTACLE_WARNING_DISTANCE
+    )
+
+    if np.any(close_obstacles):
+
+        obstacle_warning.set_text(
+            "⚠ OBSTACLE DETECTED"
+        )
+
+    else:
+
+        obstacle_warning.set_text(
+            "✓ PATH CLEAR"
+        )
+
 
     return (
-        environment_lines,
-        environment_glow,
-        scan_points,
+        local_environment,
+        local_environment_glow,
+        local_scan_points,
+        robot_marker,
+        robot_direction,
+        robot_path,
+        global_robot_marker,
+        map_image,
+        status_text,
+        obstacle_warning
     )
 
 
@@ -262,194 +831,290 @@ def update_plot(frame):
 
 def main():
 
-    print(f"Connecting to NetworkTables at {ROBOT_IP}...")
+    print(
+        f"Connecting to NetworkTables at {ROBOT_IP}..."
+    )
 
-    NetworkTables.initialize(server=ROBOT_IP)
-    NetworkTables.setUpdateRate(0.010)
+    NetworkTables.initialize(
+        server=ROBOT_IP
+    )
 
-    lidar_table = NetworkTables.getTable("Lidar")
+    NetworkTables.setUpdateRate(
+        0.010
+    )
 
-    lidar_table.addEntryListener(value_changed_callback)
+    lidar_table = NetworkTables.getTable(
+        "Lidar"
+    )
+
+    pose_table = NetworkTables.getTable(
+        POSE_TABLE_NAME
+    )
+
+    lidar_table.addEntryListener(
+        value_changed_callback
+    )
+
+    pose_table.addEntryListener(
+        value_changed_callback
+    )
 
     print("Connected.")
-    print("Launching LiDAR environment viewer...")
+    print(
+        "Launching LiDAR localisation + mapping system..."
+    )
 
 
     # ========================================================
     # FIGURE
     # ========================================================
 
-    global environment_lines
-    global environment_glow
-    global scan_points
+    global local_environment
+    global local_environment_glow
+    global local_scan_points
 
-    fig, ax = plt.subplots(figsize=(9, 9))
+    global robot_marker
+    global robot_direction
 
+    global robot_path
+    global global_robot_marker
 
-    # Dark background
-    fig.patch.set_facecolor('#0b0f0d')
-    ax.set_facecolor('#050705')
+    global map_image
 
-
-    # ========================================================
-    # AXIS
-    # ========================================================
-
-    ax.set_xlim(
-        -MAX_DISTANCE_METERS,
-        MAX_DISTANCE_METERS
-    )
-
-    ax.set_ylim(
-        -MAX_DISTANCE_METERS,
-        MAX_DISTANCE_METERS
-    )
-
-    ax.set_aspect('equal')
+    global status_text
+    global obstacle_warning
 
 
-    # ========================================================
-    # GRID
-    # ========================================================
-
-    ax.grid(
-        True,
-        color='#17351f',
-        linewidth=0.6,
-        alpha=0.6
-    )
-
-    ax.tick_params(
-        colors='#6f8f78',
-        labelsize=8
-    )
-
-    for spine in ax.spines.values():
-        spine.set_color('#21452c')
-
-
-    # ========================================================
-    # TITLE
-    # ========================================================
-
-    ax.set_title(
-        "LIVE LiDAR ENVIRONMENT MAP",
-        color='#39FF14',
-        fontsize=16,
-        fontweight='bold',
-        pad=15
-    )
-
-    ax.set_xlabel(
-        "X  (metres)",
-        color='#6f8f78'
-    )
-
-    ax.set_ylabel(
-        "Y  (metres)",
-        color='#6f8f78'
+    fig = plt.figure(
+        figsize=(15, 8)
     )
 
 
     # ========================================================
-    # ROBOT
+    # GLOBAL MAP
     # ========================================================
 
-    robot_size = 0.20
+    ax_map = fig.add_subplot(121)
 
-    robot = Polygon(
-        [
-            [0, robot_size],
-            [-robot_size * 0.7, -robot_size * 0.6],
-            [0, -robot_size * 0.3],
-            [robot_size * 0.7, -robot_size * 0.6]
+    ax_map.set_title(
+        "GLOBAL OBSTACLE MAP",
+        color="#39FF14",
+        fontsize=15,
+        fontweight="bold"
+    )
+
+    ax_map.set_facecolor(
+        "#050705"
+    )
+
+    ax_map.set_aspect("equal")
+
+    ax_map.set_xlim(
+        -MAP_SIZE_METERS / 2,
+        MAP_SIZE_METERS / 2
+    )
+
+    ax_map.set_ylim(
+        -MAP_SIZE_METERS / 2,
+        MAP_SIZE_METERS / 2
+    )
+
+    ax_map.set_xlabel(
+        "X (m)",
+        color="#6f8f78"
+    )
+
+    ax_map.set_ylabel(
+        "Y (m)",
+        color="#6f8f78"
+    )
+
+    ax_map.tick_params(
+        colors="#6f8f78"
+    )
+
+    ax_map.grid(
+        color="#18351f",
+        alpha=0.5
+    )
+
+
+    # --------------------------------------------------------
+    # Occupancy image
+    # --------------------------------------------------------
+
+    map_image = ax_map.imshow(
+        np.zeros_like(
+            occupancy_grid
+        ),
+        origin="lower",
+        extent=[
+            -MAP_SIZE_METERS / 2,
+            MAP_SIZE_METERS / 2,
+            -MAP_SIZE_METERS / 2,
+            MAP_SIZE_METERS / 2
         ],
-        closed=True,
-        facecolor='#151515',
-        edgecolor='#39FF14',
-        linewidth=2,
-        zorder=10
-    )
-
-    ax.add_patch(robot)
-
-
-    # Robot centre
-    robot_center = Circle(
-        (0, 0),
-        0.045,
-        facecolor='#39FF14',
-        edgecolor='none',
-        zorder=11
-    )
-
-    ax.add_patch(robot_center)
-
-
-    # ========================================================
-    # FORWARD DIRECTION
-    # ========================================================
-
-    ax.plot(
-        [0, 0],
-        [0, 0.65],
-        linestyle='--',
-        linewidth=1,
-        color='#39FF14',
-        alpha=0.35,
-        zorder=2
+        cmap="gray_r",
+        vmin=0,
+        vmax=1,
+        alpha=0.85,
+        interpolation="nearest"
     )
 
 
+    # --------------------------------------------------------
+    # Robot path
+    # --------------------------------------------------------
+
+    robot_path, = ax_map.plot(
+        [],
+        [],
+        color="#39FF14",
+        linewidth=1.5,
+        alpha=0.8
+    )
+
+
+    # --------------------------------------------------------
+    # Global robot marker
+    # --------------------------------------------------------
+
+    global_robot_marker, = ax_map.plot(
+        [],
+        [],
+        marker="o",
+        markersize=9,
+        markerfacecolor="#39FF14",
+        markeredgecolor="white",
+        markeredgewidth=1.5,
+        linestyle="None",
+        zorder=20
+    )
+
+
     # ========================================================
-    # ENVIRONMENT GLOW
+    # LOCAL LiDAR VIEW
     # ========================================================
 
-    environment_glow = LineCollection(
+    ax_local = fig.add_subplot(122)
+
+    ax_local.set_title(
+        "LIVE LOCAL LiDAR",
+        color="#39FF14",
+        fontsize=15,
+        fontweight="bold"
+    )
+
+    ax_local.set_facecolor(
+        "#050705"
+    )
+
+    ax_local.set_aspect("equal")
+
+    ax_local.set_xlim(
+        -MAX_DISTANCE_METERS,
+        MAX_DISTANCE_METERS
+    )
+
+    ax_local.set_ylim(
+        -MAX_DISTANCE_METERS,
+        MAX_DISTANCE_METERS
+    )
+
+    ax_local.set_xlabel(
+        "Right / Left (m)",
+        color="#6f8f78"
+    )
+
+    ax_local.set_ylabel(
+        "Forward / Back (m)",
+        color="#6f8f78"
+    )
+
+    ax_local.tick_params(
+        colors="#6f8f78"
+    )
+
+    ax_local.grid(
+        color="#18351f",
+        alpha=0.5
+    )
+
+
+    # ========================================================
+    # LOCAL LiDAR SURFACE GLOW
+    # ========================================================
+
+    local_environment_glow = LineCollection(
         [],
         linewidths=7,
-        alpha=0.07,
-        color='#39FF14',
-        capstyle='round',
-        zorder=3
+        color="#39FF14",
+        alpha=0.06,
+        capstyle="round"
     )
 
-    ax.add_collection(environment_glow)
+    ax_local.add_collection(
+        local_environment_glow
+    )
 
 
     # ========================================================
-    # MAIN ENVIRONMENT STRUCTURE
+    # LOCAL LiDAR SURFACES
     # ========================================================
 
-    environment_lines = LineCollection(
+    local_environment = LineCollection(
         [],
         linewidths=2.0,
+        color="#39FF14",
         alpha=0.95,
-        color='#39FF14',
-        capstyle='round',
-        zorder=5
+        capstyle="round"
     )
 
-    ax.add_collection(environment_lines)
-
-
-    # ========================================================
-    # RAW SCAN POINTS
-    # ========================================================
-
-    scan_points = ax.scatter(
-        [],
-        [],
-        s=5,
-        color='#a7ffb5',
-        alpha=0.35,
-        edgecolors='none',
-        zorder=4
+    ax_local.add_collection(
+        local_environment
     )
 
 
     # ========================================================
-    # RANGE RINGS
+    # RAW LiDAR POINTS
+    # ========================================================
+
+    local_scan_points = ax_local.scatter(
+        [],
+        [],
+        s=6,
+        color="#c5ffcf",
+        alpha=0.45,
+        edgecolors="none"
+    )
+
+
+    # ========================================================
+    # LOCAL ROBOT
+    # ========================================================
+
+    robot_marker, = ax_local.plot(
+        [0],
+        [0],
+        marker="o",
+        markersize=10,
+        color="#39FF14",
+        markeredgecolor="white",
+        markeredgewidth=1.5
+    )
+
+
+    # Robot heading
+    robot_direction, = ax_local.plot(
+        [0, 0],
+        [0, 0.5],
+        color="#39FF14",
+        linewidth=2
+    )
+
+
+    # ========================================================
+    # RANGE CIRCLES
     # ========================================================
 
     for radius in [1, 2, 3, 4, 5]:
@@ -458,61 +1123,78 @@ def main():
             (0, 0),
             radius,
             fill=False,
-            edgecolor='#17351f',
+            edgecolor="#18351f",
             linewidth=0.7,
-            linestyle='--',
-            alpha=0.7,
-            zorder=1
+            linestyle="--",
+            alpha=0.8
         )
 
-        ax.add_patch(circle)
+        ax_local.add_patch(
+            circle
+        )
 
-        ax.text(
-            0.08,
+
+        ax_local.text(
+            0.05,
             radius,
             f"{radius} m",
-            color='#48634e',
+            color="#48634e",
             fontsize=7
         )
 
 
     # ========================================================
-    # STATUS TEXT
+    # STATUS BAR
     # ========================================================
 
-    status_text = ax.text(
+    status_text = fig.text(
         0.02,
-        0.97,
+        0.02,
         "● LIVE",
-        transform=ax.transAxes,
-        color='#39FF14',
-        fontsize=10,
-        fontweight='bold',
-        verticalalignment='top'
+        color="#39FF14",
+        fontsize=11,
+        fontweight="bold"
     )
 
 
     # ========================================================
-    # ANIMATION
+    # OBSTACLE WARNING
+    # ========================================================
+
+    obstacle_warning = fig.text(
+        0.70,
+        0.02,
+        "✓ PATH CLEAR",
+        color="#39FF14",
+        fontsize=11,
+        fontweight="bold"
+    )
+
+
+    # ========================================================
+    # START ANIMATION
     # ========================================================
 
     ani = FuncAnimation(
         fig,
         update_plot,
         interval=50,
-        blit=True,
+        blit=False,
         cache_frame_data=False
     )
 
 
-    plt.tight_layout()
+    plt.tight_layout(
+        rect=[0, 0.04, 1, 1]
+    )
 
     plt.show()
 
 
 # ============================================================
-# PROGRAM ENTRY
+# ENTRY POINT
 # ============================================================
 
 if __name__ == "__main__":
+
     main()
