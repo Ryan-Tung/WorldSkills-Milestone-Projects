@@ -2,100 +2,517 @@ import time
 import threading
 import numpy as np
 import matplotlib.pyplot as plt
+
 from matplotlib.animation import FuncAnimation
+from matplotlib.collections import LineCollection
+from matplotlib.patches import Polygon, Circle
 from networktables import NetworkTables
-from collections import deque
 
 import logging
 logging.basicConfig(level=logging.WARNING)
 
-# --- CONFIGURATION ---
-ROBOT_IP = '10.12.34.2' # Change this to your robot's IP
+
+# ============================================================
+# CONFIGURATION
+# ============================================================
+
+ROBOT_IP = '10.12.34.2'
+
 MAX_DISTANCE_METERS = 5.0
+
+# Maximum distance between neighbouring LiDAR points
+# before we consider them to be different objects.
+CONNECT_DISTANCE = 0.30
+
+# Ignore very close readings
+MIN_DISTANCE = 0.05
+
+# Maximum number of line segments to display
+MAX_SEGMENTS = 1000
+
+
+# ============================================================
+# THREAD SAFETY
+# ============================================================
 
 data_lock = threading.Lock()
 
-# --- CONTINUOUS ROLLING BUFFER ---
-HISTORY_LENGTH = 1500
-rolling_angles = deque(maxlen=HISTORY_LENGTH)
-rolling_distances = deque(maxlen=HISTORY_LENGTH)
 
-# Temporary sync buffers for multi-part network data
-temp_angles_1 = []
-temp_distances_1 = []
-temp_angles_2 = []
-temp_distances_2 = []
+# Latest scan parts
+angles_1 = np.array([])
+distances_1 = np.array([])
+
+angles_2 = np.array([])
+distances_2 = np.array([])
+
+latest_angles = np.array([])
+latest_distances = np.array([])
+
+
+# ============================================================
+# NETWORKTABLES CALLBACK
+# ============================================================
 
 def value_changed_callback(table, key, value, isNew):
-    global temp_angles_1, temp_distances_1, temp_angles_2, temp_distances_2
-    global rolling_angles, rolling_distances
-    
+
+    global angles_1
+    global distances_1
+    global angles_2
+    global distances_2
+    global latest_angles
+    global latest_distances
+
     with data_lock:
+
+        value = np.asarray(value, dtype=float)
+
         if key == 'ScanAngles_Part1':
-            temp_angles_1 = value
+            angles_1 = value
+
         elif key == 'ScanDistances_Part1':
-            temp_distances_1 = value
-            min_len = min(len(temp_angles_1), len(temp_distances_1))
-            if min_len > 0:
-                rolling_angles.extend(temp_angles_1[:min_len])
-                rolling_distances.extend(temp_distances_1[:min_len])
-                
+            distances_1 = value
+
         elif key == 'ScanAngles_Part2':
-            temp_angles_2 = value
+            angles_2 = value
+
         elif key == 'ScanDistances_Part2':
-            temp_distances_2 = value
-            min_len = min(len(temp_angles_2), len(temp_distances_2))
-            if min_len > 0:
-                rolling_angles.extend(temp_angles_2[:min_len])
-                rolling_distances.extend(temp_distances_2[:min_len])
+            distances_2 = value
+
+        # ----------------------------------------------------
+        # Combine the two halves of the scan
+        # ----------------------------------------------------
+
+        if len(angles_1) > 0 and len(distances_1) > 0:
+
+            n1 = min(len(angles_1), len(distances_1))
+
+        else:
+            n1 = 0
+
+        if len(angles_2) > 0 and len(distances_2) > 0:
+
+            n2 = min(len(angles_2), len(distances_2))
+
+        else:
+            n2 = 0
+
+        if n1 > 0 or n2 > 0:
+
+            combined_angles = np.concatenate([
+                angles_1[:n1],
+                angles_2[:n2]
+            ])
+
+            combined_distances = np.concatenate([
+                distances_1[:n1],
+                distances_2[:n2]
+            ])
+
+            # Remove invalid readings
+            valid = np.isfinite(combined_angles) & np.isfinite(combined_distances)
+
+            combined_angles = combined_angles[valid]
+            combined_distances = combined_distances[valid]
+
+            # Sort by angle so neighbouring points are spatially adjacent
+            order = np.argsort(combined_angles)
+
+            latest_angles = combined_angles[order]
+            latest_distances = combined_distances[order]
+
+
+# ============================================================
+# BUILD ENVIRONMENT SEGMENTS
+# ============================================================
+
+def build_segments(angles_deg, distances_mm):
+
+    if len(angles_deg) < 2:
+        return []
+
+    distances_m = distances_mm / 1000.0
+
+    # Valid distance range
+    valid = (
+        np.isfinite(distances_m)
+        & (distances_m > MIN_DISTANCE)
+        & (distances_m <= MAX_DISTANCE_METERS)
+    )
+
+    angles_deg = angles_deg[valid]
+    distances_m = distances_m[valid]
+
+    if len(angles_deg) < 2:
+        return []
+
+    # --------------------------------------------------------
+    # Convert to Cartesian coordinates
+    #
+    # 0 degrees = forward
+    # Positive angle = clockwise
+    # --------------------------------------------------------
+
+    angles_rad = np.radians(angles_deg)
+
+    x = distances_m * np.sin(angles_rad)
+    y = distances_m * np.cos(angles_rad)
+
+    points = np.column_stack((x, y))
+
+    segments = []
+
+    # --------------------------------------------------------
+    # Connect only nearby points.
+    #
+    # This is the important part:
+    # large gaps become breaks in the environment.
+    # --------------------------------------------------------
+
+    for i in range(len(points) - 1):
+
+        p1 = points[i]
+        p2 = points[i + 1]
+
+        distance_between_points = np.linalg.norm(p2 - p1)
+
+        if distance_between_points <= CONNECT_DISTANCE:
+
+            segments.append([p1, p2])
+
+    return segments
+
+
+# ============================================================
+# UPDATE DISPLAY
+# ============================================================
 
 def update_plot(frame):
+
     with data_lock:
-        if len(rolling_angles) == 0:
-            return scatter,
-        
-        angles_deg = np.array(rolling_angles)
-        distances_mm = np.array(rolling_distances)
-    
-    distances_m = distances_mm / 1000.0
-    angles_rad = np.radians(angles_deg)
-    
-    # Filter invalid points
-    valid_points = distances_m > 0.05 
-    
-    scatter.set_offsets(np.c_[angles_rad[valid_points], distances_m[valid_points]])
-    return scatter,
+
+        angles = latest_angles.copy()
+        distances = latest_distances.copy()
+
+    if len(angles) < 2:
+
+        environment_lines.set_segments([])
+        environment_glow.set_segments([])
+
+        return (
+            environment_lines,
+            environment_glow,
+            scan_points,
+        )
+
+    # --------------------------------------------------------
+    # Convert to Cartesian coordinates
+    # --------------------------------------------------------
+
+    distances_m = distances / 1000.0
+
+    valid = (
+        np.isfinite(angles)
+        & np.isfinite(distances_m)
+        & (distances_m > MIN_DISTANCE)
+        & (distances_m <= MAX_DISTANCE_METERS)
+    )
+
+    angles_valid = angles[valid]
+    distances_valid = distances_m[valid]
+
+    angles_rad = np.radians(angles_valid)
+
+    x = distances_valid * np.sin(angles_rad)
+    y = distances_valid * np.cos(angles_rad)
+
+    point_data = np.column_stack((x, y))
+
+    # Update raw scan points
+    scan_points.set_offsets(point_data)
+
+    # --------------------------------------------------------
+    # Build connected environment
+    # --------------------------------------------------------
+
+    segments = build_segments(
+        angles_valid,
+        distances_valid * 1000.0
+    )
+
+    if len(segments) > MAX_SEGMENTS:
+
+        segments = segments[:MAX_SEGMENTS]
+
+    # Main environment lines
+    environment_lines.set_segments(segments)
+
+    # Glow underneath the lines
+    environment_glow.set_segments(segments)
+
+    return (
+        environment_lines,
+        environment_glow,
+        scan_points,
+    )
+
+
+# ============================================================
+# MAIN
+# ============================================================
 
 def main():
+
     print(f"Connecting to NetworkTables at {ROBOT_IP}...")
+
     NetworkTables.initialize(server=ROBOT_IP)
     NetworkTables.setUpdateRate(0.010)
-    
+
     lidar_table = NetworkTables.getTable("Lidar")
+
     lidar_table.addEntryListener(value_changed_callback)
 
-    global scatter
-    fig = plt.figure(figsize=(8, 8))
-    
-    ax = fig.add_subplot(111, projection='polar')
-    ax.set_title("Live Studica Lidar Stream (Full 360 Map - Unreduced)", va='bottom', color='white')
-    
-    ax.set_theta_zero_location("N")
-    ax.set_theta_direction(-1)
-    ax.set_ylim(0, MAX_DISTANCE_METERS)
-    
-    scatter = ax.scatter([], [], c='#39FF14', s=15, alpha=0.75, edgecolors='black')
-    
-    fig.patch.set_facecolor('#1e1e1e')
-    ax.set_facecolor('#000000')
-    ax.tick_params(colors='white')
-    ax.grid(color='#333333')
-    ax.spines['polar'].set_color('#555555')
+    print("Connected.")
+    print("Launching LiDAR environment viewer...")
 
-    ani = FuncAnimation(fig, update_plot, interval=50, blit=True, save_count=50)
-    
-    print("Launching full 360 radar viewer...")
+
+    # ========================================================
+    # FIGURE
+    # ========================================================
+
+    global environment_lines
+    global environment_glow
+    global scan_points
+
+    fig, ax = plt.subplots(figsize=(9, 9))
+
+
+    # Dark background
+    fig.patch.set_facecolor('#0b0f0d')
+    ax.set_facecolor('#050705')
+
+
+    # ========================================================
+    # AXIS
+    # ========================================================
+
+    ax.set_xlim(
+        -MAX_DISTANCE_METERS,
+        MAX_DISTANCE_METERS
+    )
+
+    ax.set_ylim(
+        -MAX_DISTANCE_METERS,
+        MAX_DISTANCE_METERS
+    )
+
+    ax.set_aspect('equal')
+
+
+    # ========================================================
+    # GRID
+    # ========================================================
+
+    ax.grid(
+        True,
+        color='#17351f',
+        linewidth=0.6,
+        alpha=0.6
+    )
+
+    ax.tick_params(
+        colors='#6f8f78',
+        labelsize=8
+    )
+
+    for spine in ax.spines.values():
+        spine.set_color('#21452c')
+
+
+    # ========================================================
+    # TITLE
+    # ========================================================
+
+    ax.set_title(
+        "LIVE LiDAR ENVIRONMENT MAP",
+        color='#39FF14',
+        fontsize=16,
+        fontweight='bold',
+        pad=15
+    )
+
+    ax.set_xlabel(
+        "X  (metres)",
+        color='#6f8f78'
+    )
+
+    ax.set_ylabel(
+        "Y  (metres)",
+        color='#6f8f78'
+    )
+
+
+    # ========================================================
+    # ROBOT
+    # ========================================================
+
+    robot_size = 0.20
+
+    robot = Polygon(
+        [
+            [0, robot_size],
+            [-robot_size * 0.7, -robot_size * 0.6],
+            [0, -robot_size * 0.3],
+            [robot_size * 0.7, -robot_size * 0.6]
+        ],
+        closed=True,
+        facecolor='#151515',
+        edgecolor='#39FF14',
+        linewidth=2,
+        zorder=10
+    )
+
+    ax.add_patch(robot)
+
+
+    # Robot centre
+    robot_center = Circle(
+        (0, 0),
+        0.045,
+        facecolor='#39FF14',
+        edgecolor='none',
+        zorder=11
+    )
+
+    ax.add_patch(robot_center)
+
+
+    # ========================================================
+    # FORWARD DIRECTION
+    # ========================================================
+
+    ax.plot(
+        [0, 0],
+        [0, 0.65],
+        linestyle='--',
+        linewidth=1,
+        color='#39FF14',
+        alpha=0.35,
+        zorder=2
+    )
+
+
+    # ========================================================
+    # ENVIRONMENT GLOW
+    # ========================================================
+
+    environment_glow = LineCollection(
+        [],
+        linewidths=7,
+        alpha=0.07,
+        color='#39FF14',
+        capstyle='round',
+        zorder=3
+    )
+
+    ax.add_collection(environment_glow)
+
+
+    # ========================================================
+    # MAIN ENVIRONMENT STRUCTURE
+    # ========================================================
+
+    environment_lines = LineCollection(
+        [],
+        linewidths=2.0,
+        alpha=0.95,
+        color='#39FF14',
+        capstyle='round',
+        zorder=5
+    )
+
+    ax.add_collection(environment_lines)
+
+
+    # ========================================================
+    # RAW SCAN POINTS
+    # ========================================================
+
+    scan_points = ax.scatter(
+        [],
+        [],
+        s=5,
+        color='#a7ffb5',
+        alpha=0.35,
+        edgecolors='none',
+        zorder=4
+    )
+
+
+    # ========================================================
+    # RANGE RINGS
+    # ========================================================
+
+    for radius in [1, 2, 3, 4, 5]:
+
+        circle = Circle(
+            (0, 0),
+            radius,
+            fill=False,
+            edgecolor='#17351f',
+            linewidth=0.7,
+            linestyle='--',
+            alpha=0.7,
+            zorder=1
+        )
+
+        ax.add_patch(circle)
+
+        ax.text(
+            0.08,
+            radius,
+            f"{radius} m",
+            color='#48634e',
+            fontsize=7
+        )
+
+
+    # ========================================================
+    # STATUS TEXT
+    # ========================================================
+
+    status_text = ax.text(
+        0.02,
+        0.97,
+        "● LIVE",
+        transform=ax.transAxes,
+        color='#39FF14',
+        fontsize=10,
+        fontweight='bold',
+        verticalalignment='top'
+    )
+
+
+    # ========================================================
+    # ANIMATION
+    # ========================================================
+
+    ani = FuncAnimation(
+        fig,
+        update_plot,
+        interval=50,
+        blit=True,
+        cache_frame_data=False
+    )
+
+
+    plt.tight_layout()
+
     plt.show()
+
+
+# ============================================================
+# PROGRAM ENTRY
+# ============================================================
 
 if __name__ == "__main__":
     main()
