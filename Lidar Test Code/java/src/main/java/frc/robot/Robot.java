@@ -147,18 +147,19 @@ public class Robot extends TimedRobot {
    */
   @Override
   public void disabledInit() {
-    if (null == RobotContainer.autoChooser)
-    {
-      RobotContainer.autoChooser = new SendableChooser<>();
-    }
-    RobotContainer.autoChooser.setDefaultOption("Drive Forward", "Drive Forward");
-    RobotContainer.autoMode.put("Drive Forward", new DriveForward());
-    addAutoMode(RobotContainer.autoChooser, "Drive Forward with PID", new DriveForwardWithPID());
-    addAutoMode(RobotContainer.autoChooser, "Drive Square with PID", new DriveSquareWithPID());
-    // Example: Box is 45 units away, measures 30 units in size, and you want to drive 100 units after it.
-    addAutoMode(RobotContainer.autoChooser, "Drive Around Obstacle with PID", new DriveAroundObstacleWithPID());
-
-    SmartDashboard.putData(RobotContainer.autoChooser);
+      if (null == RobotContainer.autoChooser) {
+          RobotContainer.autoChooser = new SendableChooser<>();
+      }
+      RobotContainer.autoChooser.setDefaultOption("Drive Forward", "Drive Forward");
+      RobotContainer.autoMode.put("Drive Forward", new DriveForward());
+      addAutoMode(RobotContainer.autoChooser, "Drive Forward with PID", new DriveForwardWithPID());
+      addAutoMode(RobotContainer.autoChooser, "Drive Square with PID", new DriveSquareWithPID());
+      
+      // FIX: Pass the active DriveTrain subsystem from RobotContainer
+      addAutoMode(RobotContainer.autoChooser, "Drive Around Obstacle with PID", 
+          new DriveAroundObstacleWithPID(m_robotContainer.getDriveTrain()));
+  
+      SmartDashboard.putData(RobotContainer.autoChooser);
   }
 
   //Used to create another autoMode and add it to the chooser

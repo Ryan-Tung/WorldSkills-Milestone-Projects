@@ -74,5 +74,8 @@ public class RobotContainer
     String mode = autoChooser.getSelected();
     return autoMode.getOrDefault(mode, new DriveForward());
   }
+  public DriveTrain getDriveTrain() {
+    return driveTrain; // Replace 'm_driveTrain' with your actual DriveTrain variable name
+}
 
 }
