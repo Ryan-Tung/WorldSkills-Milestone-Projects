@@ -3,6 +3,7 @@ package frc.robot.subsystems;
 import com.studica.frc.Lidar;
 import edu.wpi.first.wpilibj.smartdashboard.SmartDashboard;
 import edu.wpi.first.wpilibj2.command.SubsystemBase;
+import edu.wpi.first.networktables.NetworkTable;
 import edu.wpi.first.networktables.NetworkTableInstance;
 
 public class LidarTest extends SubsystemBase {
@@ -40,30 +41,31 @@ public class LidarTest extends SubsystemBase {
             int length = Math.min(scanData.distance.length, scanData.angle.length);
 
             if (length > 0) {
-                // Calculate step size to cap array at max 250 points across full 360°
-                int step = (length > 250) ? (int) Math.ceil((double) length / 250.0) : 1;
-                int outputLength = (length + step - 1) / step;
+                int mid = length / 2;
+                int len2 = length - mid;
 
-                double[] angles = new double[outputLength];
-                double[] distances = new double[outputLength];
-
-                int idx = 0;
-                for (int i = 0; i < length && idx < outputLength; i += step) {
-                    angles[idx] = scanData.angle[i];
-                    distances[idx] = scanData.distance[i];
-                    idx++;
+                // Part 1: Convert float values to double array
+                double[] angles1 = new double[mid];
+                double[] distances1 = new double[mid];
+                for (int i = 0; i < mid; i++) {
+                    angles1[i] = scanData.angle[i];
+                    distances1[i] = scanData.distance[i];
                 }
 
-                // Publish downsampled arrays spanning 0 to 360 degrees
-                NetworkTableInstance.getDefault()
-                    .getTable("Lidar")
-                    .getEntry("ScanAngles")
-                    .setDoubleArray(angles);
+                // Part 2: Convert float values to double array
+                double[] angles2 = new double[len2];
+                double[] distances2 = new double[len2];
+                for (int i = 0; i < len2; i++) {
+                    angles2[i] = scanData.angle[mid + i];
+                    distances2[i] = scanData.distance[mid + i];
+                }
 
-                NetworkTableInstance.getDefault()
-                    .getTable("Lidar")
-                    .getEntry("ScanDistances")
-                    .setDoubleArray(distances);
+                NetworkTable table = NetworkTableInstance.getDefault().getTable("Lidar");
+
+                table.getEntry("ScanAngles_Part1").setDoubleArray(angles1);
+                table.getEntry("ScanDistances_Part1").setDoubleArray(distances1);
+                table.getEntry("ScanAngles_Part2").setDoubleArray(angles2);
+                table.getEntry("ScanDistances_Part2").setDoubleArray(distances2);
 
                 if (length > 60) {
                     SmartDashboard.putNumber("Angle", scanData.angle[60]);
