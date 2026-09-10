@@ -264,6 +264,40 @@ public class DriveTrain extends SubsystemBase
         return distanceAt0;
     }
 
+    public double getLidarAt270Degrees()
+    {
+        if (scanData == null || scanData.distance == null || scanData.angle == null)
+        {
+            return 999.0;
+        }
+
+        int length = Math.min(scanData.distance.length, scanData.angle.length);
+        if (length == 0)
+        {
+            return 999.0;
+        }
+
+        double minDiff = Double.MAX_VALUE;
+        double distanceAt270 = 999.0;
+
+        for (int i = 0; i < length; i++)
+        {
+            double angle = scanData.angle[i];
+            // Handles angle boundary near 0° / 360°
+            double diff = Math.min(Math.abs(angle - 270), Math.abs(angle - 270));
+
+            if (diff < minDiff)
+            {
+                minDiff = diff;
+                // Studica Lidar provides mm; convert to cm to match existing threshold logic
+                distanceAt270 = scanData.distance[i] / 10.0;
+            }
+        }
+
+        return distanceAt270;
+    }
+
+
 
     // ============================================================
     // MOTOR CONTROL
@@ -652,10 +686,10 @@ public class DriveTrain extends SubsystemBase
                 lidarTable.getEntry("ScanAngles_Part2").setDoubleArray(angles2);
                 lidarTable.getEntry("ScanDistances_Part2").setDoubleArray(distances2);
 
-                if (length > 60)
+                if (length > 270)
                 {
-                    SmartDashboard.putNumber("Angle", scanData.angle[60]);
-                    SmartDashboard.putNumber("Distance", scanData.distance[60]);
+                    SmartDashboard.putNumber("Angle", scanData.angle[270]);
+                    SmartDashboard.putNumber("Distance", scanData.distance[270]);
                 }
             }
         }
