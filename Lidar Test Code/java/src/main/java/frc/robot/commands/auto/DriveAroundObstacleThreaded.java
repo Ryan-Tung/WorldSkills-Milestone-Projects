@@ -1,10 +1,11 @@
 package frc.robot.commands.auto;
 
+import edu.wpi.first.wpilibj.Timer;
 import edu.wpi.first.wpilibj2.command.InstantCommand;
 import frc.robot.subsystems.DriveTrain;
 import frc.robot.subsystems.NetPrinter_v2;
 
-public class DriveAroundObstacleThreaded extends AutoCommand implements Runnable {
+public class DriveAroundObstacleThreaded extends AutoCommand {
 
     // =========================================================================
     // TUNABLE CONSTANTS
@@ -21,14 +22,13 @@ public class DriveAroundObstacleThreaded extends AutoCommand implements Runnable
     private static final double RETURN_CRAB_X_SPEED = -0.5;
     private static final double RETURN_ROT_CORRECTION = 0.05;
 
-    private static final long FIRST_CLEAR_MS = 2500;   // Time to clear chassis width
-    private static final long FORWARD_DRIVE_MS = 1500; // Time to clear rear bumper
-    private static final long RETURN_LINE_MS = 3000;   // Time to crab walk back to centerline
+    private static final double FIRST_CLEAR_SEC = 2.5;   // Chassis width clearance time
+    private static final double FORWARD_DRIVE_SEC = 1.5; // Rear bumper clearance time
+    private static final double RETURN_LINE_SEC = 3.0;   // Centerline return time
     // =========================================================================
 
     private final DriveTrain driveTrain;
-    private Thread avoidanceThread;
-    private volatile boolean isRunning = false;
+    private final Timer stateTimer = new Timer();
 
     private enum State {
         DRIVING_FORWARD,
@@ -43,108 +43,95 @@ public class DriveAroundObstacleThreaded extends AutoCommand implements Runnable
     private State currentState = State.DRIVING_FORWARD;
 
     public DriveAroundObstacleThreaded(DriveTrain driveTrain) {
-        super(new InstantCommand()); // Satisfies AutoCommand inheritance
+        super(new InstantCommand());
         this.driveTrain = driveTrain;
         addRequirements(driveTrain);
     }
 
     @Override
     public void initialize() {
-        isRunning = true;
         currentState = State.DRIVING_FORWARD;
-        avoidanceThread = new Thread(this, "ObstacleAvoidanceThread");
-        avoidanceThread.start();
-        NetPrinter_v2.printf("LidarLog", "THREAD STARTED: Repeatable Obstacle Avoidance");
+        stateTimer.reset();
+        stateTimer.start();
+        NetPrinter_v2.printf("LidarLog", "STATE MACHINE STARTED: Repeatable Obstacle Avoidance");
     }
 
     @Override
-    public void run() {
-        long timerStartTime = 0;
+    public void execute() {
+        double dist0 = driveTrain.getLidarAtZeroDegrees();
+        double dist270 = driveTrain.getLidarAt270Degrees();
 
-        while (isRunning && !Thread.currentThread().isInterrupted()) {
-            double dist0 = driveTrain.getLidarAtZeroDegrees();
-            double dist270 = driveTrain.getLidarAt270Degrees();
+        switch (currentState) {
 
-            switch (currentState) {
-
-                case DRIVING_FORWARD:
-                    driveTrain.holonomicDrive(0, FORWARD_SPEED, 0);
-                    if (dist0 <= APPROACH_STOP_CM && dist0 >= MIN_DETECTION_CM) {
-                        NetPrinter_v2.printf("LidarLog", "Obstacle Detected at 0°! Distance: " + dist0);
-                        currentState = State.STRAFE_OUT;
-                    }
-                    break;
-
-                case STRAFE_OUT:
-                    driveTrain.holonomicDrive(CRAB_X_SPEED, 0, CRAB_ROT_CORRECTION);
-                    if (dist0 < MIN_DETECTION_CM || dist0 > MAX_DETECTION_CM) {
-                        timerStartTime = System.currentTimeMillis();
-                        currentState = State.STRAFE_EXTRA_CLEAR;
-                    }
-                    break;
-
-                case STRAFE_EXTRA_CLEAR:
-                    driveTrain.holonomicDrive(CRAB_X_SPEED, 0, CRAB_ROT_CORRECTION);
-                    if (System.currentTimeMillis() - timerStartTime >= FIRST_CLEAR_MS) {
-                        currentState = State.DRIVE_FIND_SIDE;
-                    }
-                    break;
-
-                case DRIVE_FIND_SIDE:
-                    driveTrain.holonomicDrive(0, FORWARD_SPEED, 0);
-                    if (dist270 > 0 && dist270 <= SIDE_DETECTION_CM) {
-                        NetPrinter_v2.printf("LidarLog", "Box acquired on 270° side: " + dist270);
-                        currentState = State.DRIVE_PASS_SIDE;
-                    }
-                    break;
-
-                case DRIVE_PASS_SIDE:
-                    driveTrain.holonomicDrive(0, FORWARD_SPEED, 0);
-                    if (dist270 <= 0 || dist270 > SIDE_DETECTION_CM) {
-                        NetPrinter_v2.printf("LidarLog", "Box passed on side. Clearing rear bumper...");
-                        timerStartTime = System.currentTimeMillis();
-                        currentState = State.DRIVE_CLEAR_REAR;
-                    }
-                    break;
-
-                case DRIVE_CLEAR_REAR:
-                    driveTrain.holonomicDrive(0, FORWARD_SPEED, 0);
-                    if (System.currentTimeMillis() - timerStartTime >= FORWARD_DRIVE_MS) {
-                        timerStartTime = System.currentTimeMillis();
-                        currentState = State.STRAFE_RETURN;
-                    }
-                    break;
-
-                case STRAFE_RETURN:
-                    driveTrain.holonomicDrive(RETURN_CRAB_X_SPEED, 0, RETURN_ROT_CORRECTION);
-                    if (System.currentTimeMillis() - timerStartTime >= RETURN_LINE_MS) {
-                        NetPrinter_v2.printf("LidarLog", "Returned to line. Ready for next obstacle!");
-                        currentState = State.DRIVING_FORWARD;
-                    }
-                    break;
-            }
-
-            try {
-                Thread.sleep(20);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
+            case DRIVING_FORWARD:
+                driveTrain.holonomicDrive(0, FORWARD_SPEED, 0);
+                if (dist0 <= APPROACH_STOP_CM && dist0 >= MIN_DETECTION_CM) {
+                    NetPrinter_v2.printf("LidarLog", "Obstacle Ahead! Distance: " + dist0);
+                    currentState = State.STRAFE_OUT;
+                }
                 break;
-            }
+
+            case STRAFE_OUT:
+                driveTrain.holonomicDrive(CRAB_X_SPEED, 0, CRAB_ROT_CORRECTION);
+                if (dist0 < MIN_DETECTION_CM || dist0 > MAX_DETECTION_CM) {
+                    stateTimer.reset();
+                    currentState = State.STRAFE_EXTRA_CLEAR;
+                }
+                break;
+
+            case STRAFE_EXTRA_CLEAR:
+                driveTrain.holonomicDrive(CRAB_X_SPEED, 0, CRAB_ROT_CORRECTION);
+                if (stateTimer.hasPeriodPassed(FIRST_CLEAR_SEC)) {
+                    currentState = State.DRIVE_FIND_SIDE;
+                }
+                break;
+
+            case DRIVE_FIND_SIDE:
+                driveTrain.holonomicDrive(0, FORWARD_SPEED, 0);
+                if (dist270 > 0 && dist270 <= SIDE_DETECTION_CM) {
+                    NetPrinter_v2.printf("LidarLog", "Box acquired on 270° side: " + dist270);
+                    currentState = State.DRIVE_PASS_SIDE;
+                }
+                break;
+
+            case DRIVE_PASS_SIDE:
+                driveTrain.holonomicDrive(0, FORWARD_SPEED, 0);
+                if (dist270 <= 0 || dist270 > SIDE_DETECTION_CM) {
+                    NetPrinter_v2.printf("LidarLog", "Box passed on side. Clearing rear bumper...");
+                    stateTimer.reset();
+                    currentState = State.DRIVE_CLEAR_REAR;
+                }
+                break;
+
+            case DRIVE_CLEAR_REAR:
+                driveTrain.holonomicDrive(0, FORWARD_SPEED, 0);
+                if (stateTimer.hasPeriodPassed(FORWARD_DRIVE_SEC)) {
+                    stateTimer.reset();
+                    currentState = State.STRAFE_RETURN;
+                }
+                break;
+
+            case STRAFE_RETURN:
+                driveTrain.holonomicDrive(RETURN_CRAB_X_SPEED, 0, RETURN_ROT_CORRECTION);
+                if (stateTimer.hasPeriodPassed(RETURN_LINE_SEC)) {
+                    NetPrinter_v2.printf("LidarLog", "Returned to line. Resetting for next obstacle!");
+                    
+                    // REPEATABILITY RESET: Automatically loops back to looking for obstacles
+                    currentState = State.DRIVING_FORWARD;
+                }
+                break;
         }
     }
 
     @Override
     public void end(boolean interrupted) {
-        isRunning = false;
-        if (avoidanceThread != null) {
-            avoidanceThread.interrupt();
-        }
         driveTrain.holonomicDrive(0, 0, 0);
-        NetPrinter_v2.printf("LidarLog", "THREAD STOPPED");
+        stateTimer.stop();
+        NetPrinter_v2.printf("LidarLog", "COMMAND STOPPED");
     }
 
     @Override
     public boolean isFinished() {
-        return false;
+        return false; // Continuous loop
     }
 }
