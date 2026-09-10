@@ -66,3 +66,16 @@ jar {
     from { configurations.runtimeClasspath.collect { it.isDirectory() ? it : zipTree(it) } }
     manifest edu.wpi.first.gradlerio.GradleRIOPlugin.javaManifest(ROBOT_MAIN_CLASS)
 }
+
+// Windows setup: Launches the python script in a separate terminal window after deploy
+task launchLogListener(type: Exec) {
+    commandLine 'cmd', '/c', 'start', 'cmd', '/k', 'python debug_printf_v2.py.txt'
+}
+
+task launchMapDisplay(type: Exec) {
+    commandLine 'cmd', '/c', 'start', 'cmd', '/k', 'python lidar_360_viewer.py.txt'
+}
+// Attach to task execution graph once Gradle finishes evaluating all project extensions
+tasks.named('deploy'){
+    finalizedBy launchLogListener, launchMapDisplay
+}
