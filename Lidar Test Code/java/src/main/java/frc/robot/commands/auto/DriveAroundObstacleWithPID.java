@@ -16,7 +16,7 @@ public class DriveAroundObstacleWithPID extends AutoCommand {
     private static final double MIN_DETECTION_CM = 10.0;
     private static final double MAX_DETECTION_CM = 80.0;
     private static final double APPROACH_STOP_CM = 30.0;   // Distance to stop in front of the box
-    private static final double SIDE_DETECTION_CM = 150.0;  // Threshold to consider box detected on side
+    private static final double SIDE_DETECTION_CM = 100.0;  // Threshold to consider box detected on side
 
     // Motor Speeds & Directions
     private static final double FORWARD_SPEED = 0.5;
