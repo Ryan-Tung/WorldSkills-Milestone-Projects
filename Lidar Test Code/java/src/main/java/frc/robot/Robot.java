@@ -160,8 +160,8 @@ public class Robot extends TimedRobot {
       addAutoMode(RobotContainer.autoChooser, "Drive Around Obstacle with PID", 
           new DriveAroundObstacleWithPID(m_robotContainer.getDriveTrain()));
   
-      // Threaded Repeatable Mode
-      addAutoMode(RobotContainer.autoChooser, "Drive Around Obstacle Threaded", 
+      // State Machine Repeatable Mode
+      addAutoMode(RobotContainer.autoChooser, "Drive Around Obstacle State Machine", 
           new DriveAroundObstacleStateMachine(m_robotContainer.getDriveTrain()));
   
       SmartDashboard.putData(RobotContainer.autoChooser);
