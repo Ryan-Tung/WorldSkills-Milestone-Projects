@@ -28,7 +28,7 @@ public class DriveTrain extends SubsystemBase
     private static final double TAPE_DELTA_THRESHOLD_VOLTS = 0.5; // Voltage drop indicating black tape
 
     // ============================================================
-    // LIDAR
+    // LIDAR!
     // ============================================================
     private Lidar lidar;
     private Lidar.ScanData scanData;
