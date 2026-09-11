@@ -5,7 +5,7 @@ import edu.wpi.first.wpilibj2.command.InstantCommand;
 import frc.robot.subsystems.DriveTrain;
 import frc.robot.subsystems.NetPrinter_v2;
 
-public class DriveAroundObstacleThreaded extends AutoCommand {
+public class DriveAroundObstacleStateMachine extends AutoCommand {
 
     // =========================================================================
     // TUNABLE CONSTANTS
@@ -42,7 +42,7 @@ public class DriveAroundObstacleThreaded extends AutoCommand {
 
     private State currentState = State.DRIVING_FORWARD;
 
-    public DriveAroundObstacleThreaded(DriveTrain driveTrain) {
+    public DriveAroundObstacleStateMachine(DriveTrain driveTrain) {
         super(new InstantCommand());
         this.driveTrain = driveTrain;
         addRequirements(driveTrain);

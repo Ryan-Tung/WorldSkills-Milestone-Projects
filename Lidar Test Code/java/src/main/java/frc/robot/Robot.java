@@ -27,7 +27,7 @@ import frc.robot.commands.auto.DriveForward;
 import frc.robot.commands.auto.DriveForwardWithPID;
 import frc.robot.commands.auto.DriveSquareWithPID;
 import frc.robot.commands.auto.DriveAroundObstacleWithPID;
-import frc.robot.commands.auto.DriveAroundObstacleThreaded;
+import frc.robot.commands.auto.DriveAroundObstacleStateMachine;
 
 /**
  * The VM is configured to automatically run this class, and to call the functions corresponding to
@@ -162,7 +162,7 @@ public class Robot extends TimedRobot {
   
       // Threaded Repeatable Mode
       addAutoMode(RobotContainer.autoChooser, "Drive Around Obstacle Threaded", 
-          new DriveAroundObstacleThreaded(m_robotContainer.getDriveTrain()));
+          new DriveAroundObstacleStateMachine(m_robotContainer.getDriveTrain()));
   
       SmartDashboard.putData(RobotContainer.autoChooser);
   }
