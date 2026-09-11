@@ -66,7 +66,16 @@ scan_update_counter = 0
 last_mapped_scan = -1
 
 occupancy_grid = np.zeros((MAP_CELLS, MAP_CELLS), dtype=np.float32)
-robot_path_x, robot_path_y = [], []
+
+# --- LiDAR Odometry Tracking Globals ---
+prev_scan_points = None
+lidar_pose_x = 0.0
+lidar_pose_y = 0.0
+lidar_pose_heading = 0.0
+lidar_path_x, lidar_path_y = [], []
+
+# Commented out original path list:
+# robot_path_x, robot_path_y = [], []
 
 # Circular buffer to store the last 10 log messages for GUI rendering
 log_history = collections.deque(maxlen=10)
@@ -103,10 +112,8 @@ def value_changed_callback(table, key, value, isNew):
 
 def log_callback(table, key, value, isNew):
     log_line = f"[{key}] ROBOT: {value}"
-    # Print to standard terminal console
     print(log_line)
 
-    # Append to GUI display buffer
     with data_lock:
         log_history.append(log_line)
 
@@ -114,6 +121,67 @@ def log_callback(table, key, value, isNew):
 # ============================================================
 # UTILITY & MATH FUNCTIONS
 # ============================================================
+
+
+def icp_2d(src, dst, max_iterations=20, tolerance=1e-4):
+    """
+    2D Iterative Closest Point algorithm for scan matching.
+    Calculates transformation matrix R (rotation) and t (translation)
+    such that dst ≈ R @ src + t
+    """
+    if len(src) < 10 or len(dst) < 10:
+        return np.eye(2), np.zeros(2)
+
+    curr_src = src.copy()
+
+    for _ in range(max_iterations):
+        # Find nearest neighbors
+        dists = np.linalg.norm(
+            curr_src[:, np.newaxis, :] - dst[np.newaxis, :, :], axis=2
+        )
+        indices = np.argmin(dists, axis=1)
+        matched_dst = dst[indices]
+
+        # Rejection of outliers distant > 0.5 meters
+        min_dists = dists[np.arange(len(curr_src)), indices]
+        valid = min_dists < 0.5
+        if np.sum(valid) < 5:
+            break
+
+        s_valid = curr_src[valid]
+        d_valid = matched_dst[valid]
+
+        # Centroids
+        cs = np.mean(s_valid, axis=0)
+        cd = np.mean(d_valid, axis=0)
+
+        # SVD for best rigid transformation
+        H = (s_valid - cs).T @ (d_valid - cd)
+        U, S, Vt = np.linalg.svd(H)
+        R = Vt.T @ U.T
+
+        if np.linalg.det(R) < 0:
+            Vt[1, :] *= -1
+            R = Vt.T @ U.T
+
+        t = cd - R @ cs
+        curr_src = (R @ curr_src.T).T + t
+
+        if np.linalg.norm(t) < tolerance:
+            break
+
+    # Extract final step transformation
+    cs = np.mean(src, axis=0)
+    cc = np.mean(curr_src, axis=0)
+    H = (src - cs).T @ (curr_src - cc)
+    U, S, Vt = np.linalg.svd(H)
+    R_total = Vt.T @ U.T
+    if np.linalg.det(R_total) < 0:
+        Vt[1, :] *= -1
+        R_total = Vt.T @ U.T
+    t_total = cc - R_total @ cs
+
+    return R_total, t_total
 
 
 def get_combined_scan():
@@ -259,13 +327,13 @@ def update_map_display():
 
 def update_plot(frame):
     global last_mapped_scan
+    global prev_scan_points, lidar_pose_x, lidar_pose_y, lidar_pose_heading
 
     with data_lock:
         cx, cy, ch = robot_x, robot_y, robot_heading
         current_scan_counter = scan_update_counter
         logs_text = "\n".join(log_history)
 
-    # Update Log Panel
     log_display.set_text(
         logs_text if logs_text else "Waiting for system logs..."
     )
@@ -286,10 +354,48 @@ def update_plot(frame):
     local_x, local_y = lidar_to_local(valid_angles, valid_distances * 1000)
 
     # Update Local LiDAR View
-    local_scan_points.set_offsets(np.column_stack([local_x, local_y]))
+    current_points = np.column_stack([local_x, local_y])
+    local_scan_points.set_offsets(current_points)
     segments = build_segments(valid_angles, valid_distances * 1000)
     local_environment.set_segments(segments)
     local_environment_glow.set_segments(segments)
+
+    # ------------------------------------------------------------
+    # LiDAR-BASED PATH TRACING (SCAN MATCHING)
+    # ------------------------------------------------------------
+    if prev_scan_points is not None and len(current_points) > 10 and len(prev_scan_points) > 10:
+        R_step, t_step = icp_2d(current_points, prev_scan_points)
+
+        d_heading_rad = np.arctan2(R_step[0, 1], R_step[0, 0])
+        d_heading_deg = np.degrees(d_heading_rad)
+
+        heading_rad = np.radians(lidar_pose_heading)
+        dx_global = t_step[0] * np.cos(heading_rad) + t_step[1] * np.sin(heading_rad)
+        dy_global = -t_step[0] * np.sin(heading_rad) + t_step[1] * np.cos(heading_rad)
+
+        lidar_pose_x += dx_global
+        lidar_pose_y += dy_global
+        lidar_pose_heading = (lidar_pose_heading + d_heading_deg) % 360.0
+
+    prev_scan_points = current_points.copy()
+
+    lidar_path_x.append(lidar_pose_x)
+    lidar_path_y.append(lidar_pose_y)
+    if len(lidar_path_x) > 5000:
+        del lidar_path_x[:-5000]
+        del lidar_path_y[:-5000]
+
+    robot_path.set_data(lidar_path_x, lidar_path_y)
+
+    # ------------------------------------------------------------
+    # COMMENTED OUT: ORIGINAL ODOMETRY PATH TRACING CODE
+    # ------------------------------------------------------------
+    # robot_path_x.append(cx)
+    # robot_path_y.append(cy)
+    # if len(robot_path_x) > 5000:
+    #     del robot_path_x[:-5000]
+    #     del robot_path_y[:-5000]
+    # robot_path.set_data(robot_path_x, robot_path_y)
 
     # Update Occupancy Grid Map
     if current_scan_counter != last_mapped_scan:
@@ -303,31 +409,22 @@ def update_plot(frame):
         else:
             mx, my = local_x, local_y
 
-        update_occupancy_map(mx, my, cx, cy, ch)
+        update_occupancy_map(mx, my, lidar_pose_x, lidar_pose_y, lidar_pose_heading)
         update_map_display()
 
-    # Update Trajectory
-    robot_path_x.append(cx)
-    robot_path_y.append(cy)
-    if len(robot_path_x) > 5000:
-        del robot_path_x[:-5000]
-        del robot_path_y[:-5000]
-
-    robot_path.set_data(robot_path_x, robot_path_y)
-
-    # Update Robot Local Marker & Direction
+    # Update Robot Markers
     robot_marker.set_data([0], [0])
-    heading_rad = np.radians(ch)
+    heading_rad = np.radians(lidar_pose_heading)
     robot_direction.set_data(
         [0, 0.5 * np.sin(heading_rad)], [0, 0.5 * np.cos(heading_rad)]
     )
 
-    # Update Global Robot Location
-    global_robot_marker.set_data([cx], [cy])
+    # Update Global Robot Location using LiDAR estimated position
+    global_robot_marker.set_data([lidar_pose_x], [lidar_pose_y])
 
     # Status Bar Updates
     status_text.set_text(
-        f"● LIVE    X: {cx:.2f} m    Y: {cy:.2f} m    Heading: {ch:.1f}°"
+        f"● LIVE LiDAR Pose   X: {lidar_pose_x:.2f} m   Y: {lidar_pose_y:.2f} m   Heading: {lidar_pose_heading:.1f}°"
     )
 
     if np.any(valid_distances < OBSTACLE_WARNING_DISTANCE):
@@ -346,7 +443,6 @@ def main():
     NetworkTables.initialize(server=ROBOT_IP)
     NetworkTables.setUpdateRate(0.010)
 
-    # NetworkTables Listeners
     lidar_table = NetworkTables.getTable("Lidar")
     pose_table = NetworkTables.getTable(POSE_TABLE_NAME)
     sd_table = NetworkTables.getTable("SmartDashboard")
@@ -354,7 +450,6 @@ def main():
     lidar_table.addEntryListener(value_changed_callback)
     pose_table.addEntryListener(value_changed_callback)
 
-    # Register log entry listeners
     for key_name in LOG_KEYS:
         sd_table.addEntryListener(log_callback, key=key_name)
 
@@ -467,7 +562,7 @@ def main():
         )
         ax_local.text(0.05, r, f"{r} m", color="#48634e", fontsize=7)
 
-    # 3. Live Logs Window (Bottom Full-Width Grid Cell)
+    # 3. Live Logs Window
     ax_log = fig.add_subplot(gs[1, :])
     ax_log.set_title(
         "LIVE ROBOT CONSOLE LOGS",
