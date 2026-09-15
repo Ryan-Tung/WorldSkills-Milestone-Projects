@@ -279,8 +279,8 @@ public class DriveTrain extends SubsystemBase
         double fieldDeltaX = robotDeltaY * -Math.cos(headingRad);
         double fieldDeltaY = -robotDeltaY * Math.sin(headingRad);
 
-        poseX += fieldDeltaX / 1000.0;
-        poseY += fieldDeltaY / 1000.0;
+        poseX += fieldDeltaX / 500.0;
+        poseY += fieldDeltaY / 500.0;
 
         previousLeftDistance = currentLeft;
         previousRightDistance = currentRight;

@@ -1,799 +1,1695 @@
-// package frc.robot.subsystems;
-
-// import com.kauailabs.navx.frc.AHRS;
-// import com.studica.frc.TitanQuad;
-// import com.studica.frc.TitanQuadEncoder;
-// import com.studica.frc.Lidar;
-// import com.studica.frc.Cobra;
-
-// import edu.wpi.first.networktables.NetworkTable;
-// import edu.wpi.first.networktables.NetworkTableEntry;
-// import edu.wpi.first.networktables.NetworkTableInstance;
-
-// import edu.wpi.first.wpilibj.SPI;
-// import edu.wpi.first.wpilibj.shuffleboard.Shuffleboard;
-// import edu.wpi.first.wpilibj.shuffleboard.ShuffleboardTab;
-// import edu.wpi.first.wpilibj.smartdashboard.SmartDashboard;
-// import edu.wpi.first.wpilibj2.command.SubsystemBase;
-
-// import frc.robot.Constants;
-
-// public class DriveTrain extends SubsystemBase
-// {
-//     // ============================================================
-//     // COBRA IR SENSOR
-//     // ============================================================
-//     private Cobra cobra;
-//     private final double[] whiteBaseline = new double[4];
-//     private static final double TAPE_DELTA_THRESHOLD_VOLTS = 0.5; // Voltage drop indicating black tape
-
-//     // ============================================================
-//     // LIDAR!
-//     // ============================================================
-//     private Lidar lidar;
-//     private Lidar.ScanData scanData;
-//     public boolean scanning = true;
-
-//     // ============================================================
-//     // MOTORS & ENCODERS & NAVX
-//     // ============================================================
-//     private TitanQuad leftMotor;
-//     private TitanQuad rightMotor;
-//     private TitanQuad backMotor;
-
-//     private TitanQuadEncoder leftEncoder;
-//     private TitanQuadEncoder rightEncoder;
-//     private TitanQuadEncoder backEncoder;
-
-//     private AHRS navx;
-
-//     // NetworkTables & Shuffleboard entries
-//     private final NetworkTable driveTable = NetworkTableInstance.getDefault().getTable("Drive");
-//     private final NetworkTable lidarTable = NetworkTableInstance.getDefault().getTable("Lidar");
-//     private final NetworkTable controlTable = NetworkTableInstance.getDefault().getTable("DriveControls");
-
-//     private ShuffleboardTab tab = Shuffleboard.getTab("Training Robot");
-//     private NetworkTableEntry leftEncoderValue = tab.add("Left Encoder", 0).getEntry();
-//     private NetworkTableEntry rightEncoderValue = tab.add("Right Encoder", 0).getEntry();
-//     private NetworkTableEntry backEncoderValue = tab.add("Back Encoder", 0).getEntry();
-//     private NetworkTableEntry gyroValue = tab.add("NavX Heading", 0).getEntry();
-//     private NetworkTableEntry poseXValue = tab.add("Pose X", 0).getEntry();
-//     private NetworkTableEntry poseYValue = tab.add("Pose Y", 0).getEntry();
-//     private NetworkTableEntry poseHeadingValue = tab.add("Pose Heading", 0).getEntry();
-
-//     private double poseX = 0.0;
-//     private double poseY = 0.0;
-//     private double previousLeftDistance = 0.0;
-//     private double previousRightDistance = 0.0;
-//     private double previousBackDistance = 0.0;
-//     private double previousHeading = 0.0;
-
-//     public DriveTrain()
-//     {
-//         // --------------------------------------------------------
-//         // COBRA SENSOR INIT
-//         // --------------------------------------------------------
-//         cobra = new Cobra();
-
-//         // --------------------------------------------------------
-//         // LIDAR
-//         // --------------------------------------------------------
-//         lidar = new Lidar(Lidar.Port.kUSB2);
-//         lidar.clusterConfig(50.0f, 5);
-//         lidar.enableFilter(Lidar.Filter.kCLUSTER, false);
-
-//         // --------------------------------------------------------
-//         // MOTORS & ENCODERS
-//         // --------------------------------------------------------
-//         leftMotor = new TitanQuad(Constants.TITAN_ID, Constants.M3);
-//         rightMotor = new TitanQuad(Constants.TITAN_ID, Constants.M0);
-//         backMotor = new TitanQuad(Constants.TITAN_ID, Constants.M1);
-
-//         leftEncoder = new TitanQuadEncoder(leftMotor, Constants.M3, Constants.WHEEL_DIST_PER_TICK);
-//         rightEncoder = new TitanQuadEncoder(rightMotor, Constants.M0, Constants.WHEEL_DIST_PER_TICK);
-//         backEncoder = new TitanQuadEncoder(backMotor, Constants.M1, Constants.WHEEL_DIST_PER_TICK);
-
-//         navx = new AHRS(SPI.Port.kMXP);
-
-//         resetOdometry();
-//     }
-
-//     // ============================================================
-//     // COBRA CONTROL & CALIBRATION
-//     // ============================================================
-
-//     public float getCobraVoltage(int channel) {
-//         if (channel < 0 || channel >= 4) return 0.0f;
-//         return cobra.getVoltage(channel);
-//     }
-
-//     /**
-//      * Calibrates ambient white surface voltage for all 4 Cobra channels.
-//      */
-//     public void calibrateCobraWhite() {
-//         double[] sums = new double[4];
-//         int samples = 10;
-//         for (int s = 0; s < samples; s++) {
-//             for (int ch = 0; ch < 4; ch++) {
-//                 sums[ch] += cobra.getVoltage(ch);
-//             }
-//             try { Thread.sleep(10); } catch (InterruptedException ignored) {}
-//         }
-
-//         StringBuilder log = new StringBuilder("CALIBRATED WHITE BASELINE -> ");
-//         for (int ch = 0; ch < 4; ch++) {
-//             whiteBaseline[ch] = sums[ch] / samples;
-//             log.append(String.format("Ch%d: %.2fV | ", ch, whiteBaseline[ch]));
-//         }
-//     }
-
-//     /**
-//      * Checks if a specific Cobra channel detects black tape.
-//      * Black tape absorbs IR, dropping voltage relative to baseline white floor.
-//      */
-//     public boolean isTapeDetected(int channel) {
-//         if (channel < 0 || channel >= 4) return false;
-//         double currentVoltage = cobra.getVoltage(channel);
-
-//         return (whiteBaseline[channel] - currentVoltage) >= TAPE_DELTA_THRESHOLD_VOLTS;
-//     }
-
-//     /**
-//      * Returns true if any of the 4 Cobra channels detect black tape.
-//      */
-//     public boolean isAnyTapeDetected() {
-//         for (int ch = 0; ch < 4; ch++) {
-//             if (isTapeDetected(ch)) {
-//                 return true;
-//             }
-//         }
-//         return false;
-//     }
-
-//     // ============================================================
-//     // LIDAR CONTROL & READINGS
-//     // ============================================================
-
-//     public void startScan() {
-//         lidar.start();
-//         scanning = true;
-//     }
-
-//     public void stopScan() {
-//         lidar.stop();
-//         scanning = false;
-//     }
-
-//     public double getLidarAtZeroDegrees() {
-//         if (scanData == null || scanData.distance == null || scanData.angle == null) return 999.0;
-//         int length = Math.min(scanData.distance.length, scanData.angle.length);
-//         if (length == 0) return 999.0;
-
-//         double minDiff = Double.MAX_VALUE;
-//         double distanceAt0 = 999.0;
-
-//         for (int i = 0; i < length; i++) {
-//             double angle = scanData.angle[i];
-//             double diff = Math.min(Math.abs(angle - 0.0), Math.abs(angle - 360.0));
-//             if (diff < minDiff) {
-//                 minDiff = diff;
-//                 distanceAt0 = scanData.distance[i] / 10.0;
-//             }
-//         }
-//         return distanceAt0;
-//     }
-
-//     public double getLidarAt270Degrees() {
-//         if (scanData == null || scanData.distance == null || scanData.angle == null) return 999.0;
-//         int length = Math.min(scanData.distance.length, scanData.angle.length);
-//         if (length == 0) return 999.0;
-
-//         double minDiff = Double.MAX_VALUE;
-//         double distanceAt270 = 999.0;
-
-//         for (int i = 0; i < length; i++) {
-//             double angle = scanData.angle[i];
-//             double diff = Math.abs(angle - 270.0);
-//             if (diff < minDiff) {
-//                 minDiff = diff;
-//                 distanceAt270 = scanData.distance[i] / 10.0;
-//             }
-//         }
-//         return distanceAt270;
-//     }
-
-//     // ============================================================
-//     // MOTOR & ODOMETRY METHODS
-//     // ============================================================
-
-//     public void setLeftMotorSpeed(double speed) { leftMotor.set(speed); }
-//     public void setRightMotorSpeed(double speed) { rightMotor.set(speed); }
-//     public void setBackMotorSpeed(double speed) { backMotor.set(speed); }
-
-//     public void setDriveMotorSpeeds(double leftSpeed, double rightSpeed, double backSpeed) {
-//         leftMotor.set(leftSpeed);
-//         rightMotor.set(rightSpeed);
-//         backMotor.set(backSpeed);
-//     }
-
-//     public void holonomicDrive(double x, double y, double z) {
-//         double rightSpeed = ((x / 3) - (y / Math.sqrt(3)) + z) * Math.sqrt(3);
-//         double leftSpeed  = ((x / 3) + (y / Math.sqrt(3)) + z) * Math.sqrt(3);
-//         double backSpeed  = (-2 * x / 3) + z;
-
-//         double max = Math.abs(rightSpeed);
-//         if (Math.abs(leftSpeed) > max) max = Math.abs(leftSpeed);
-//         if (Math.abs(backSpeed) > max) max = Math.abs(backSpeed);
-
-//         if (max > 1) {
-//             rightSpeed /= max;
-//             leftSpeed /= max;
-//             backSpeed /= max;
-//         }
-
-//         leftMotor.set(leftSpeed);
-//         rightMotor.set(rightSpeed);
-//         backMotor.set(backSpeed);
-//     }
-
-//     /**
-//      * Reads keyboard velocity inputs sent from the Python application via NetworkTables.
-//      */
-//     public void processNetworkTableDrive() {
-//         double forward = controlTable.getEntry("CmdForward").getDouble(0.0);
-//         double strafe = controlTable.getEntry("CmdStrafe").getDouble(0.0);
-//         double turn = controlTable.getEntry("CmdTurn").getDouble(0.0);
-
-//         holonomicDrive(strafe, forward, turn);
-//     }
-
-//     public double getLeftEncoderDistance() { return leftEncoder.getEncoderDistance() * -1; }
-//     public double getRightEncoderDistance() { return rightEncoder.getEncoderDistance() * -1; }
-//     public double getBackEncoderDistance() { return backEncoder.getEncoderDistance(); }
-//     // public double getLeftEncoderDistance() { return leftEncoder.getEncoderDistance() * -1; }
-//     // public double getRightEncoderDistance() { return rightEncoder.getEncoderDistance() * -1; }
-//     // public double getBackEncoderDistance() { return backEncoder.getEncoderDistance(); }
-//     public double getAverageForwardEncoderDistance() { return (getLeftEncoderDistance() + getRightEncoderDistance()) / 2.0; }
-
-//     public double getYaw() { return -navx.getYaw(); }
-
-//     private double normalizeAngle(double angle) {
-//         while (angle > 180.0) angle -= 360.0;
-//         while (angle < -180.0) angle += 360.0;
-//         return angle;
-//     }
-
-//     private void updateOdometry() {
-//         double currentLeft = getLeftEncoderDistance();
-//         double currentRight = getRightEncoderDistance();
-//         double currentBack = getBackEncoderDistance();
-
-//         double deltaLeft = currentLeft - previousLeftDistance;
-//         double deltaRight = currentRight - previousRightDistance;
-//         double deltaBack = currentBack - previousBackDistance;
-
-//         double currentHeading = getYaw();
-//         double deltaHeading = normalizeAngle(currentHeading - previousHeading);
-
-//         double robotDeltaX = -((deltaLeft + deltaRight) / (2.0 * Math.sqrt(3.0))) - deltaBack;
-//         double robotDeltaY = (deltaRight - deltaLeft) / 2.0;
-
-//         double averageHeading = previousHeading + (deltaHeading / 2.0);
-//         double headingRad = Math.toRadians(averageHeading);
-
-//         double fieldDeltaX = robotDeltaX * Math.cos(headingRad) - robotDeltaY * Math.sin(headingRad);
-//         double fieldDeltaY = robotDeltaX * Math.sin(headingRad) + robotDeltaY * Math.cos(headingRad);
-
-//         poseX += fieldDeltaX / 1000.0;
-//         poseY += fieldDeltaY / 1000.0;
-
-//         previousLeftDistance = currentLeft;
-//         previousRightDistance = currentRight;
-//         previousBackDistance = currentBack;
-//         previousHeading = currentHeading;
-//     }
-
-//     public double getPoseX() { return poseX; }
-//     public double getPoseY() { return poseY; }
-//     public double getPoseHeading() { return getYaw(); }
-
-//     public void resetEncoders() {
-//         leftEncoder.reset();
-//         rightEncoder.reset();
-//         backEncoder.reset();
-//     }
-
-//     public void resetYaw() { navx.zeroYaw(); }
-
-//     public void resetOdometry() {
-//         resetEncoders();
-//         resetYaw();
-//         poseX = 0.0;
-//         poseY = 0.0;
-//         previousLeftDistance = getLeftEncoderDistance();
-//         previousRightDistance = getRightEncoderDistance();
-//         previousBackDistance = getBackEncoderDistance();
-//         previousHeading = getYaw();
-//     }
-
-//     @Override
-//     public void periodic() {
-//         // Run keyboard control loop from NetworkTables
-//         processNetworkTableDrive();
-
-//         updateOdometry();
-
-//         // Telemetry
-//         leftEncoderValue.setDouble(getLeftEncoderDistance());
-//         rightEncoderValue.setDouble(getRightEncoderDistance());
-//         backEncoderValue.setDouble(getBackEncoderDistance());
-//         gyroValue.setDouble(getYaw());
-//         poseXValue.setDouble(poseX);
-//         poseYValue.setDouble(poseY);
-//         poseHeadingValue.setDouble(getYaw());
-
-//         SmartDashboard.putNumber("Pose X", poseX);
-//         SmartDashboard.putNumber("Pose Y", poseY);
-//         SmartDashboard.putNumber("Pose Heading", getYaw());
-
-//         // Publish IR voltages to Dashboard
-//         for (int i = 0; i < 4; i++) {
-//             SmartDashboard.putNumber("Cobra Ch" + i, getCobraVoltage(i));
-//         }
-
-//         driveTable.getEntry("PoseX").setDouble(poseX);
-//         driveTable.getEntry("PoseY").setDouble(poseY);
-//         driveTable.getEntry("PoseHeading").setDouble(getYaw());
-
-//         if (!scanning) return;
-
-//         scanData = lidar.getData();
-//         if (scanData != null && scanData.distance != null && scanData.angle != null) {
-//             int length = Math.min(scanData.distance.length, scanData.angle.length);
-//             if (length > 0) {
-//                 int mid = length / 2;
-//                 int len2 = length - mid;
-
-//                 double[] angles1 = new double[mid];
-//                 double[] distances1 = new double[mid];
-//                 for (int i = 0; i < mid; i++) {
-//                     angles1[i] = scanData.angle[i];
-//                     distances1[i] = scanData.distance[i];
-//                 }
-
-//                 double[] angles2 = new double[len2];
-//                 double[] distances2 = new double[len2];
-//                 for (int i = 0; i < len2; i++) {
-//                     angles2[i] = scanData.angle[mid + i];
-//                     distances2[i] = scanData.distance[mid + i];
-//                 }
-
-//                 lidarTable.getEntry("ScanAngles_Part1").setDoubleArray(angles1);
-//                 lidarTable.getEntry("ScanDistances_Part1").setDoubleArray(distances1);
-//                 lidarTable.getEntry("ScanAngles_Part2").setDoubleArray(angles2);
-//                 lidarTable.getEntry("ScanDistances_Part2").setDoubleArray(distances2);
-//             }
-//         }
-//     }
-// }
-
-
-// package frc.robot.subsystems;
-
-// import com.kauailabs.navx.frc.AHRS;
-// import com.studica.frc.TitanQuad;
-// import com.studica.frc.TitanQuadEncoder;
-// import com.studica.frc.Lidar;
-// import com.studica.frc.Cobra;
-
-// import edu.wpi.first.networktables.NetworkTable;
-// import edu.wpi.first.networktables.NetworkTableEntry;
-// import edu.wpi.first.networktables.NetworkTableInstance;
-
-// import edu.wpi.first.wpilibj.SPI;
-// import edu.wpi.first.wpilibj.shuffleboard.Shuffleboard;
-// import edu.wpi.first.wpilibj.shuffleboard.ShuffleboardTab;
-// import edu.wpi.first.wpilibj.smartdashboard.SmartDashboard;
-// import edu.wpi.first.wpilibj2.command.SubsystemBase;
-
-// import frc.robot.Constants;
-// import java.util.ArrayList;
-// import java.util.List;
-
-// public class DriveTrain extends SubsystemBase
-// {
-//     // ============================================================
-//     // HARDWARE & SENSORS
-//     // ============================================================
-//     private Cobra cobra;
-//     private final double[] whiteBaseline = new double[4];
-//     private static final double TAPE_DELTA_THRESHOLD_VOLTS = 0.5;
-
-//     private Lidar lidar;
-//     private Lidar.ScanData scanData;
-//     public boolean scanning = true;
-
-//     private TitanQuad leftMotor;
-//     private TitanQuad rightMotor;
-//     private TitanQuad backMotor;
-
-//     private TitanQuadEncoder leftEncoder;
-//     private TitanQuadEncoder rightEncoder;
-//     private TitanQuadEncoder backEncoder;
-
-//     private AHRS navx;
-
-//     private boolean navxConnected = false;
-//     private boolean lidarConnected = false;
-
-//     // ============================================================
-//     // PURE LiDAR LOCALIZATION (X, Y in meters, Heading in deg)
-//     // ============================================================
-//     private double lidarX = 0.0;
-//     private double lidarY = 0.0;
-//     private double lidarHeading = 0.0;
-
-//     // Map reference points for LiDAR ICP (wall/field obstacle boundaries in meters)
-//     private final List<double[]> mapReferencePoints = new ArrayList<>();
-
-//     // ============================================================
-//     // NETWORKTABLES & SHUFFLEBOARD TELEMETRY
-//     // ============================================================
-//     private final NetworkTable driveTable = NetworkTableInstance.getDefault().getTable("Drive");
-//     private final NetworkTable lidarTable = NetworkTableInstance.getDefault().getTable("Lidar");
-//         private final NetworkTable controlTable = NetworkTableInstance.getDefault().getTable("DriveControls");
-
-
-//     private ShuffleboardTab tab = Shuffleboard.getTab("Training Robot");
-
-//     private NetworkTableEntry leftEncoderValue = tab.add("Left Encoder", 0).getEntry();
-//     private NetworkTableEntry rightEncoderValue = tab.add("Right Encoder", 0).getEntry();
-//     private NetworkTableEntry backEncoderValue = tab.add("Back Encoder", 0).getEntry();
-//     private NetworkTableEntry gyroValue = tab.add("NavX Heading", 0).getEntry();
-
-//     public DriveTrain()
-//     {
-//         cobra = new Cobra();
-
-//         try {
-//             lidar = new Lidar(Lidar.Port.kUSB2);
-//             lidar.clusterConfig(50.0f, 5);
-//             lidar.enableFilter(Lidar.Filter.kCLUSTER, false);
-//             lidarConnected = true;
-//         } catch (Throwable e) {
-//             System.err.println("CRITICAL WARNING: Lidar failed to initialize! " + e.getMessage());
-//             lidarConnected = false;
-//         }
-
-//         try {
-//             navx = new AHRS(SPI.Port.kMXP);
-//             navxConnected = navx.isConnected();
-//         } catch (Throwable e) {
-//             System.err.println("CRITICAL WARNING: NavX failed to initialize! " + e.getMessage());
-//             navxConnected = false;
-//         }
-
-//         leftMotor = new TitanQuad(Constants.TITAN_ID, Constants.M3);
-//         rightMotor = new TitanQuad(Constants.TITAN_ID, Constants.M0);
-//         backMotor = new TitanQuad(Constants.TITAN_ID, Constants.M1);
-
-//         leftEncoder = new TitanQuadEncoder(leftMotor, Constants.M3, Constants.WHEEL_DIST_PER_TICK);
-//         rightEncoder = new TitanQuadEncoder(rightMotor, Constants.M0, Constants.WHEEL_DIST_PER_TICK);
-//         backEncoder = new TitanQuadEncoder(backMotor, Constants.M1, Constants.WHEEL_DIST_PER_TICK);
-
-//         initMapReference();
-//         resetPose();
-//     }
-
-//     private void initMapReference() {
-//         double mapSize = 10.0; // 10x10m square arena around center (0,0)
-//         double step = 0.25;
-//         for (double p = -mapSize / 2; p <= mapSize / 2; p += step) {
-//             mapReferencePoints.add(new double[]{p, mapSize / 2});   // Top wall
-//             mapReferencePoints.add(new double[]{p, -mapSize / 2});  // Bottom wall
-//             mapReferencePoints.add(new double[]{mapSize / 2, p});   // Right wall
-//             mapReferencePoints.add(new double[]{-mapSize / 2, p});  // Left wall
-//         }
-//     }
-
-//     // ============================================================
-//     // SENSOR & MOTOR METHODS
-//     // ============================================================
-
-//     public float getCobraVoltage(int channel) {
-//         if (channel < 0 || channel >= 4) return 0.0f;
-//         return cobra.getVoltage(channel);
-//     }
-
-//     public void calibrateCobraWhite() {
-//         double[] sums = new double[4];
-//         int samples = 10;
-//         for (int s = 0; s < samples; s++) {
-//             for (int ch = 0; ch < 4; ch++) {
-//                 sums[ch] += cobra.getVoltage(ch);
-//             }
-//             try { Thread.sleep(10); } catch (InterruptedException ignored) {}
-//         }
-
-//         StringBuilder log = new StringBuilder("CALIBRATED WHITE BASELINE -> ");
-//         for (int ch = 0; ch < 4; ch++) {
-//             whiteBaseline[ch] = sums[ch] / samples;
-//             log.append(String.format("Ch%d: %.2fV | ", ch, whiteBaseline[ch]));
-//         }
-//     }
-
-//     public boolean isTapeDetected(int channel) {
-//         if (channel < 0 || channel >= 4) return false;
-//         double currentVoltage = cobra.getVoltage(channel);
-//         return (whiteBaseline[channel] - currentVoltage) >= TAPE_DELTA_THRESHOLD_VOLTS;
-//     }
-
-//     public boolean isAnyTapeDetected() {
-//         for (int ch = 0; ch < 4; ch++) {
-//             if (isTapeDetected(ch)) return true;
-//         }
-//         return false;
-//     }
-
-//     public void startScan() { 
-//         if (lidarConnected && lidar != null) lidar.start(); 
-//         scanning = true; 
-//     }
-
-//     public void stopScan() { 
-//         if (lidarConnected && lidar != null) lidar.stop(); 
-//         scanning = false; 
-//     }
-
-//     public void setLeftMotorSpeed(double speed) { leftMotor.set(speed); }
-//     public void setRightMotorSpeed(double speed) { rightMotor.set(speed); }
-//     public void setBackMotorSpeed(double speed) { backMotor.set(speed); }
-
-//     public void setDriveMotorSpeeds(double leftSpeed, double rightSpeed, double backSpeed) {
-//         leftMotor.set(leftSpeed);
-//         rightMotor.set(rightSpeed);
-//         backMotor.set(backSpeed);
-//     }
-
-//     public void holonomicDrive(double x, double y, double z) {
-//         double rightSpeed = ((x / 3) - (y / Math.sqrt(3)) + z) * Math.sqrt(3);
-//         double leftSpeed  = ((x / 3) + (y / Math.sqrt(3)) + z) * Math.sqrt(3);
-//         double backSpeed  = (-2 * x / 3) + z;
-
-//         double max = Math.abs(rightSpeed);
-//         if (Math.abs(leftSpeed) > max) max = Math.abs(leftSpeed);
-//         if (Math.abs(backSpeed) > max) max = Math.abs(backSpeed);
-
-//         if (max > 1) {
-//             rightSpeed /= max;
-//             leftSpeed /= max;
-//             backSpeed /= max;
-//         }
-
-//         leftMotor.set(leftSpeed);
-//         rightMotor.set(rightSpeed);
-//         backMotor.set(backSpeed);
-//     }
-//     //     /**
-//     //  * Reads keyboard velocity inputs sent from the Python application via NetworkTables.
-//     //  */
-//     public void processNetworkTableDrive() {
-//         double forward = controlTable.getEntry("CmdForward").getDouble(0.0);
-//         double strafe = controlTable.getEntry("CmdStrafe").getDouble(0.0);
-//         double turn = controlTable.getEntry("CmdTurn").getDouble(0.0);
-
-//         holonomicDrive(strafe, forward, turn);
-//     }
-
-//     public double getLeftEncoderDistance() { return leftEncoder.getEncoderDistance() * -1; }
-//     public double getRightEncoderDistance() { return rightEncoder.getEncoderDistance() * -1; }
-//     public double getBackEncoderDistance() { return backEncoder.getEncoderDistance(); }
-//     public double getAverageForwardEncoderDistance() { return (getLeftEncoderDistance() + getRightEncoderDistance()) / 2.0; }
-
-//     public double getYaw() { 
-//         return (navx != null && navxConnected) ? navx.getYaw() : 0.0; 
-//     }
-
-//     // ============================================================
-//     // PURE LiDAR LOCALIZATION ENGINE
-//     // ============================================================
-
-//     public double getLidarAtZeroDegrees() {
-//         if (scanData == null || scanData.distance == null || scanData.angle == null) return 999.0;
-//         int length = Math.min(scanData.distance.length, scanData.angle.length);
-//         if (length == 0) return 999.0;
-
-//         double minDiff = Double.MAX_VALUE;
-//         double distanceAt0 = 999.0;
-
-//         for (int i = 0; i < length; i++) {
-//             double angle = scanData.angle[i];
-//             double diff = Math.min(Math.abs(angle - 0.0), Math.abs(angle - 360.0));
-//             if (diff < minDiff) {
-//                 minDiff = diff;
-//                 distanceAt0 = scanData.distance[i] / 10.0;
-//             }
-//         }
-//         return distanceAt0;
-//     }
-
-//     public double getLidarAt270Degrees() {
-//         if (scanData == null || scanData.distance == null || scanData.angle == null) return 999.0;
-//         int length = Math.min(scanData.distance.length, scanData.angle.length);
-//         if (length == 0) return 999.0;
-
-//         double minDiff = Double.MAX_VALUE;
-//         double distanceAt270 = 999.0;
-
-//         for (int i = 0; i < length; i++) {
-//             double angle = scanData.angle[i];
-//             double diff = Math.abs(angle - 270.0);
-//             if (diff < minDiff) {
-//                 minDiff = diff;
-//                 distanceAt270 = scanData.distance[i] / 10.0;
-//             }
-//         }
-//         return distanceAt270;
-//     }
-
-//     /**
-//      * Performs ICP scan matching against map boundaries directly updating the LiDAR Pose.
-//      */
-//     private void processLidarLocalizationSafe(float[] rawAngles, float[] rawDistances, int length) {
-//         if (rawAngles == null || rawDistances == null || length < 10) return;
-
-//         // Convert scan into local point cloud (meters)
-//         List<double[]> localPoints = new ArrayList<>();
-//         for (int i = 0; i < length; i++) {
-//             double distM = rawDistances[i] / 1000.0;
-//             if (distM < 0.05 || distM > 5.0) continue;
-//             double rad = Math.toRadians(rawAngles[i]);
-//             localPoints.add(new double[]{ distM * Math.sin(rad), distM * Math.cos(rad) });
-//         }
-
-//         if (localPoints.isEmpty()) return;
-
-//         // Start ICP optimization seeded by previous LiDAR pose estimate
-//         double estX = lidarX;
-//         double estY = lidarY;
-//         double estHeading = lidarHeading;
-
-//         int iterations = 5;
-//         for (int iter = 0; iter < iterations; iter++) {
-//             double headingRad = Math.toRadians(estHeading);
-//             double cos = Math.cos(headingRad);
-//             double sin = Math.sin(headingRad);
-
-//             double errX = 0, errY = 0;
-//             int count = 0;
-
-//             for (double[] pt : localPoints) {
-//                 // Transform local LiDAR point to global frame
-//                 double gx = estX + pt[0] * cos + pt[1] * sin;
-//                 double gy = estY - pt[0] * sin + pt[1] * cos;
-
-//                 // Find closest map reference point
-//                 double minDistSq = Double.MAX_VALUE;
-//                 double[] nearest = null;
-//                 for (double[] ref : mapReferencePoints) {
-//                     double d2 = (ref[0] - gx) * (ref[0] - gx) + (ref[1] - gy) * (ref[1] - gy);
-//                     if (d2 < minDistSq) {
-//                         minDistSq = d2;
-//                         nearest = ref;
-//                     }
-//                 }
-
-//                 if (nearest != null && minDistSq < 0.5) { // Reject outliers > 0.7m
-//                     errX += (nearest[0] - gx);
-//                     errY += (nearest[1] - gy);
-//                     count++;
-//                 }
-//             }
-
-//             if (count > 0) {
-//                 estX += (errX / count) * 0.5;
-//                 estY += (errY / count) * 0.5;
-//             }
-//         }
-
-//         // Store pure LiDAR localized pose
-//         lidarX = estX;
-//         lidarY = estY;
-//         lidarHeading = estHeading;
-//     }
-
-//     // ============================================================
-//     // POSE GETTERS & RESETS
-//     // ============================================================
-
-//     public double getPoseX() { return lidarX; }
-//     public double getPoseY() { return lidarY; }
-//     public double getPoseHeading() { return lidarHeading; }
-
-//     public double getLidarX() { return lidarX; }
-//     public double getLidarY() { return lidarY; }
-//     public double getLidarHeading() { return lidarHeading; }
-
-//     public void resetEncoders() {
-//         leftEncoder.reset();
-//         rightEncoder.reset();
-//         backEncoder.reset();
-//     }
-
-//     public void resetYaw() { 
-//         if (navx != null && navxConnected) navx.zeroYaw(); 
-//     }
-
-//     public void resetPose() {
-//         resetEncoders();
-//         resetYaw();
-//         lidarX = 0.0; 
-//         lidarY = 0.0; 
-//         lidarHeading = 0.0;
-//     }
-
-//     // ============================================================
-//     // PERIODIC LOOP & TELEMETRY
-//     // ============================================================
-
-//     @Override
-//     public void periodic() {
-//          // Run keyboard control loop from NetworkTables
-//         processNetworkTableDrive();
-
-//         if (scanning && lidarConnected && lidar != null) {
-//             try {
-//                 scanData = lidar.getData();
-//                 if (scanData != null && scanData.distance != null && scanData.angle != null) {
-//                     float[] rawAngles = scanData.angle.clone();
-//                     float[] rawDistances = scanData.distance.clone();
-
-//                     int length = Math.min(rawDistances.length, rawAngles.length);
-//                     if (length > 0) {
-//                         processLidarLocalizationSafe(rawAngles, rawDistances, length);
-
-//                         int mid = length / 2;
-//                         int len2 = length - mid;
-
-//                         double[] angles1 = new double[mid], distances1 = new double[mid];
-//                         for (int i = 0; i < mid; i++) {
-//                             angles1[i] = rawAngles[i];
-//                             distances1[i] = rawDistances[i];
-//                         }
-
-//                         double[] angles2 = new double[len2], distances2 = new double[len2];
-//                         for (int i = 0; i < len2; i++) {
-//                             angles2[i] = rawAngles[mid + i];
-//                             distances2[i] = rawDistances[mid + i];
-//                         }
-
-//                         lidarTable.getEntry("ScanAngles_Part1").setDoubleArray(angles1);
-//                         lidarTable.getEntry("ScanDistances_Part1").setDoubleArray(distances1);
-//                         lidarTable.getEntry("ScanAngles_Part2").setDoubleArray(angles2);
-//                         lidarTable.getEntry("ScanDistances_Part2").setDoubleArray(distances2);
-//                     }
-//                 }
-//             } catch (Exception e) {
-//                 System.err.println("LiDAR Read Error: " + e.getMessage());
-//             }
-//         }
-
-//         // Telemetry & Debug Publishing
-//         leftEncoderValue.setDouble(getLeftEncoderDistance());
-//         rightEncoderValue.setDouble(getRightEncoderDistance());
-//         backEncoderValue.setDouble(getBackEncoderDistance());
-//         gyroValue.setDouble(getYaw());
-
-//         // Pure LiDAR Pose Stream
-//         driveTable.getEntry("PoseX").setDouble(lidarX);
-//         driveTable.getEntry("PoseY").setDouble(lidarY);
-//         driveTable.getEntry("PoseHeading").setDouble(lidarHeading);
-
-//         driveTable.getEntry("LidarPoseX").setDouble(lidarX);
-//         driveTable.getEntry("LidarPoseY").setDouble(lidarY);
-//         driveTable.getEntry("LidarPoseHeading").setDouble(lidarHeading);
-
-//         SmartDashboard.putNumber("Lidar X", lidarX);
-//         SmartDashboard.putNumber("Lidar Y", lidarY);
-//     }
-// }
+// import collections
+// import logging
+// import threading
+
+// from matplotlib.animation import FuncAnimation
+// from matplotlib.collections import LineCollection
+// from matplotlib.colors import LinearSegmentedColormap
+// from matplotlib.patches import Circle
+// import matplotlib.pyplot as plt
+// from networktables import NetworkTables
+// import numpy as np
+
+
+// # ============================================================
+// # MATPLOTLIB CONFIGURATION
+// # ============================================================
+
+// for keymap in list(plt.rcParams.keys()):
+//     if keymap.startswith("keymap."):
+//         plt.rcParams[keymap] = []
+
+// logging.basicConfig(level=logging.WARNING)
+
+
+// # ============================================================
+// # CONFIGURATION
+// # ============================================================
+
+// ROBOT_IP = "10.12.34.2"
+
+// # ------------------------------------------------------------
+// # LiDAR
+// # ------------------------------------------------------------
+
+// MAX_DISTANCE_METERS = 5.0
+// MIN_DISTANCE_METERS = 0.05
+
+// CONNECT_DISTANCE = 0.30
+// MAX_SCAN_POINTS = 360
+
+
+// # ------------------------------------------------------------
+// # MAP
+// # ------------------------------------------------------------
+
+// MAP_SIZE_METERS = 20.0
+// GRID_RESOLUTION = 0.05
+// MAP_CELLS = int(MAP_SIZE_METERS / GRID_RESOLUTION)
+
+// # Reduced update strength to prevent ghosting
+// FREE_UPDATE = -0.35
+// OCCUPIED_UPDATE = 0.55
+
+// LOG_ODDS_MIN = -3.0
+// LOG_ODDS_MAX = 3.0
+
+// # Slowly forget old measurements
+// MAP_DECAY = 0.995
+
+
+// # ------------------------------------------------------------
+// # POSE
+// # ------------------------------------------------------------
+
+// POSE_TABLE_NAME = "Drive"
+
+// POSE_X_KEY = "PoseX"
+// POSE_Y_KEY = "PoseY"
+// POSE_HEADING_KEY = "PoseHeading"
+
+
+// # ------------------------------------------------------------
+// # LOGGING
+// # ------------------------------------------------------------
+
+// LOG_KEYS = [
+//     "DriveLog",
+//     "RobotContainer",
+//     "LidarLog",
+//     "IRLog"
+// ]
+
+
+// # ------------------------------------------------------------
+// # DRIVE CONTROL
+// # ------------------------------------------------------------
+
+// CONTROL_TABLE_NAME = "DriveControls"
+
+// MAX_LINEAR_SPEED = 0.5
+// MAX_ANGULAR_SPEED = 0.5
+
+
+// # ============================================================
+// # THREAD SAFETY & GLOBAL DATA
+// # ============================================================
+
+// data_lock = threading.Lock()
+
+// angles_1 = np.array([])
+// distances_1 = np.array([])
+
+// angles_2 = np.array([])
+// distances_2 = np.array([])
+
+
+// # Raw NetworkTables pose
+// raw_robot_x = 0.0
+// raw_robot_y = 0.0
+// raw_robot_heading = 0.0
+
+
+// # Reference frame after R reset
+// ref_x = 0.0
+// ref_y = 0.0
+// ref_heading = 0.0
+
+
+// # Relative robot pose
+// robot_x = 0.0
+// robot_y = 0.0
+// robot_heading = 0.0
+
+
+// # Scan tracking
+// scan_update_counter = 0
+// last_mapped_scan = -1
+
+
+// # Occupancy grid
+// occupancy_grid = np.zeros(
+//     (MAP_CELLS, MAP_CELLS),
+//     dtype=np.float32
+// )
+
+
+// # Robot path
+// robot_path_x = []
+// robot_path_y = []
+
+// # Only add a path point after moving this distance
+// PATH_POINT_DISTANCE = 0.05
+
+// last_path_x = None
+// last_path_y = None
+
+
+// # Logs
+// log_history = collections.deque(maxlen=10)
+
+
+// # Keyboard
+// pressed_keys = set()
+
+// control_table = None
+
+
+// # ============================================================
+// # POSE TRANSFORMATION
+// # ============================================================
+
+// def compute_relative_pose(rx, ry, rh):
+//     """
+//     Convert raw robot pose into the user-reset global frame.
+
+//     After pressing R:
+//         robot position = (0, 0)
+//         robot heading = 0 degrees
+
+//     The translation is rotated into the new global frame.
+//     """
+
+//     dx = rx - ref_x
+//     dy = ry - ref_y
+
+//     # Rotate the displacement by the inverse reference heading
+//     alpha = np.radians(ref_heading)
+
+//     rel_x = (
+//         dx * np.cos(alpha)
+//         - dy * np.sin(alpha)
+//     )
+
+//     rel_y = (
+//         dx * np.sin(alpha)
+//         + dy * np.cos(alpha)
+//     )
+
+//     rel_heading = (
+//         rh - ref_heading
+//     ) % 360.0
+
+//     return rel_x, rel_y, rel_heading
+
+
+// # ============================================================
+// # RESET GLOBAL FRAME
+// # ============================================================
+
+// def reset_global_frame():
+
+//     global ref_x
+//     global ref_y
+//     global ref_heading
+
+//     global robot_x
+//     global robot_y
+//     global robot_heading
+
+//     global occupancy_grid
+
+//     global last_path_x
+//     global last_path_y
+
+//     with data_lock:
+
+//         # Capture current raw pose
+//         ref_x = raw_robot_x
+//         ref_y = raw_robot_y
+//         ref_heading = raw_robot_heading
+
+//         # Immediately transform current pose
+//         robot_x, robot_y, robot_heading = compute_relative_pose(
+//             raw_robot_x,
+//             raw_robot_y,
+//             raw_robot_heading
+//         )
+
+//         # ----------------------------------------------------
+//         # Clear map
+//         # ----------------------------------------------------
+
+//         occupancy_grid.fill(0)
+
+//         # ----------------------------------------------------
+//         # Clear path
+//         # ----------------------------------------------------
+
+//         robot_path_x.clear()
+//         robot_path_y.clear()
+
+//         last_path_x = 0.0
+//         last_path_y = 0.0
+
+//         # ----------------------------------------------------
+//         # Tell robot to reset NavX
+//         # ----------------------------------------------------
+
+//         if control_table is not None:
+
+//             control_table.putBoolean(
+//                 "ResetNavX",
+//                 True
+//             )
+
+//             control_table.putNumber(
+//                 "TargetHeading",
+//                 0.0
+//             )
+
+//         log_history.append(
+//             "[SYSTEM] Global frame reset: "
+//             "Pose = (0.00, 0.00), Heading = 0.0°"
+//         )
+
+
+// # ============================================================
+// # KEYBOARD
+// # ============================================================
+
+// def on_key_press(event):
+
+//     if event.key is None:
+//         return
+
+//     key = event.key.lower()
+
+//     if key == " ":
+
+//         pressed_keys.clear()
+
+//     elif key == "r":
+
+//         reset_global_frame()
+
+//     else:
+
+//         pressed_keys.add(key)
+
+
+// def on_key_release(event):
+
+//     if event.key is None:
+//         return
+
+//     key = event.key.lower()
+
+//     pressed_keys.discard(key)
+
+
+// # ============================================================
+// # DRIVE COMMANDS
+// # ============================================================
+
+// def publish_drive_commands():
+
+//     if control_table is None:
+//         return 0.0, 0.0
+
+//     forward = 0.0
+//     turn = 0.0
+
+//     # Forward / reverse
+//     if "w" in pressed_keys:
+//         forward += MAX_LINEAR_SPEED
+
+//     if "s" in pressed_keys:
+//         forward -= MAX_LINEAR_SPEED
+
+//     # Turning
+//     if "d" in pressed_keys:
+//         turn += MAX_ANGULAR_SPEED
+
+//     if "a" in pressed_keys:
+//         turn -= MAX_ANGULAR_SPEED
+
+//     control_table.putNumber(
+//         "CmdForward",
+//         forward
+//     )
+
+//     control_table.putNumber(
+//         "CmdTurn",
+//         turn
+//     )
+
+//     # Reset pulse
+//     if "r" not in pressed_keys:
+
+//         control_table.putBoolean(
+//             "ResetNavX",
+//             False
+//         )
+
+//     return forward, turn
+
+
+// # ============================================================
+// # NETWORKTABLE CALLBACK
+// # ============================================================
+
+// def value_changed_callback(
+//     table,
+//     key,
+//     value,
+//     isNew
+// ):
+
+//     global angles_1
+//     global distances_1
+
+//     global angles_2
+//     global distances_2
+
+//     global raw_robot_x
+//     global raw_robot_y
+//     global raw_robot_heading
+
+//     global robot_x
+//     global robot_y
+//     global robot_heading
+
+//     global scan_update_counter
+
+//     with data_lock:
+
+//         # ----------------------------------------------------
+//         # LiDAR
+//         # ----------------------------------------------------
+
+//         if key == "ScanAngles_Part1":
+
+//             angles_1 = np.asarray(
+//                 value,
+//                 dtype=float
+//             )
+
+//         elif key == "ScanDistances_Part1":
+
+//             distances_1 = np.asarray(
+//                 value,
+//                 dtype=float
+//             )
+
+//         elif key == "ScanAngles_Part2":
+
+//             angles_2 = np.asarray(
+//                 value,
+//                 dtype=float
+//             )
+
+//         elif key == "ScanDistances_Part2":
+
+//             distances_2 = np.asarray(
+//                 value,
+//                 dtype=float
+//             )
+
+//             scan_update_counter += 1
+
+//         # ----------------------------------------------------
+//         # Pose
+//         # ----------------------------------------------------
+
+//         elif key == POSE_X_KEY:
+
+//             raw_robot_x = float(value)
+
+//             robot_x, robot_y, robot_heading = (
+//                 compute_relative_pose(
+//                     raw_robot_x,
+//                     raw_robot_y,
+//                     raw_robot_heading
+//                 )
+//             )
+
+//         elif key == POSE_Y_KEY:
+
+//             raw_robot_y = float(value)
+
+//             robot_x, robot_y, robot_heading = (
+//                 compute_relative_pose(
+//                     raw_robot_x,
+//                     raw_robot_y,
+//                     raw_robot_heading
+//                 )
+//             )
+
+//         elif key == POSE_HEADING_KEY:
+
+//             raw_robot_heading = float(value)
+
+//             robot_x, robot_y, robot_heading = (
+//                 compute_relative_pose(
+//                     raw_robot_x,
+//                     raw_robot_y,
+//                     raw_robot_heading
+//                 )
+//             )
+
+
+// # ============================================================
+// # LOG CALLBACK
+// # ============================================================
+
+// def log_callback(
+//     table,
+//     key,
+//     value,
+//     isNew
+// ):
+
+//     log_line = f"[{key}] ROBOT: {value}"
+
+//     with data_lock:
+//         log_history.append(log_line)
+
+
+// # ============================================================
+// # COMBINE LiDAR SCANS
+// # ============================================================
+
+// def get_combined_scan():
+
+//     with data_lock:
+
+//         a1 = angles_1.copy()
+//         d1 = distances_1.copy()
+
+//         a2 = angles_2.copy()
+//         d2 = distances_2.copy()
+
+//     n1 = min(
+//         len(a1),
+//         len(d1)
+//     )
+
+//     n2 = min(
+//         len(a2),
+//         len(d2)
+//     )
+
+//     if n1 == 0 and n2 == 0:
+
+//         return (
+//             np.array([]),
+//             np.array([])
+//         )
+
+//     angles = np.concatenate(
+//         [
+//             a1[:n1],
+//             a2[:n2]
+//         ]
+//     )
+
+//     distances = np.concatenate(
+//         [
+//             d1[:n1],
+//             d2[:n2]
+//         ]
+//     )
+
+//     valid = (
+//         np.isfinite(angles)
+//         & np.isfinite(distances)
+//     )
+
+//     angles = angles[valid]
+//     distances = distances[valid]
+
+//     order = np.argsort(angles)
+
+//     return (
+//         angles[order],
+//         distances[order]
+//     )
+
+
+// # ============================================================
+// # LiDAR COORDINATES
+// # ============================================================
+
+// def lidar_to_local(
+//     angles_deg,
+//     distances_mm
+// ):
+
+//     distances_m = distances_mm / 1000.0
+
+//     angles_rad = np.radians(
+//         angles_deg
+//     )
+
+//     # IMPORTANT:
+//     #
+//     # Local frame:
+//     #   X = Forward
+//     #   Y = Right
+//     #
+//     local_x = (
+//         distances_m
+//         * np.cos(angles_rad)
+//     )
+
+//     local_y = (
+//         distances_m
+//         * np.sin(angles_rad)
+//     )
+
+//     return local_x, local_y
+
+
+// # ============================================================
+// # LOCAL -> GLOBAL
+// # ============================================================
+
+// def local_to_global(
+//     local_x,
+//     local_y,
+//     x_robot,
+//     y_robot,
+//     heading_deg
+// ):
+
+//     heading = np.radians(
+//         heading_deg
+//     )
+
+//     # Rotate local robot coordinates
+//     # into the global frame.
+
+//     global_x = (
+//         x_robot
+//         + local_x * np.cos(heading)
+//         - local_y * np.sin(heading)
+//     )
+
+//     global_y = (
+//         y_robot
+//         + local_x * np.sin(heading)
+//         + local_y * np.cos(heading)
+//     )
+
+//     return global_x, global_y
+
+
+// # ============================================================
+// # WORLD -> GRID
+// # ============================================================
+
+// def world_to_grid(
+//     x,
+//     y
+// ):
+
+//     map_min = -MAP_SIZE_METERS / 2
+
+//     grid_x = (
+//         (x - map_min)
+//         / GRID_RESOLUTION
+//     ).astype(int)
+
+//     grid_y = (
+//         (y - map_min)
+//         / GRID_RESOLUTION
+//     ).astype(int)
+
+//     return grid_x, grid_y
+
+
+// def valid_grid_cell(
+//     x,
+//     y
+// ):
+
+//     return (
+//         0 <= x < MAP_CELLS
+//         and
+//         0 <= y < MAP_CELLS
+//     )
+
+
+// # ============================================================
+// # BRESENHAM
+// # ============================================================
+
+// def bresenham(
+//     x0,
+//     y0,
+//     x1,
+//     y1
+// ):
+
+//     points = []
+
+//     dx = abs(x1 - x0)
+//     dy = abs(y1 - y0)
+
+//     sx = 1 if x0 < x1 else -1
+//     sy = 1 if y0 < y1 else -1
+
+//     err = dx - dy
+
+//     while True:
+
+//         points.append(
+//             (x0, y0)
+//         )
+
+//         if (
+//             x0 == x1
+//             and
+//             y0 == y1
+//         ):
+//             break
+
+//         e2 = 2 * err
+
+//         if e2 > -dy:
+
+//             err -= dy
+//             x0 += sx
+
+//         if e2 < dx:
+
+//             err += dx
+//             y0 += sy
+
+//     return points
+
+
+// # ============================================================
+// # OCCUPANCY MAP
+// # ============================================================
+
+// def update_occupancy_map(
+//     local_x,
+//     local_y,
+//     x_robot,
+//     y_robot,
+//     heading
+// ):
+
+//     global occupancy_grid
+
+//     # --------------------------------------------------------
+//     # Convert LiDAR points into global coordinates
+//     # --------------------------------------------------------
+
+//     world_x, world_y = local_to_global(
+//         local_x,
+//         local_y,
+//         x_robot,
+//         y_robot,
+//         heading
+//     )
+
+//     # --------------------------------------------------------
+//     # Robot grid position
+//     # --------------------------------------------------------
+
+//     robot_grid_x, robot_grid_y = world_to_grid(
+//         np.array([x_robot]),
+//         np.array([y_robot])
+//     )
+
+//     rx = int(robot_grid_x[0])
+//     ry = int(robot_grid_y[0])
+
+//     if not valid_grid_cell(rx, ry):
+//         return
+
+//     # --------------------------------------------------------
+//     # Apply slow decay to old evidence
+//     # --------------------------------------------------------
+
+//     occupancy_grid *= MAP_DECAY
+
+//     # --------------------------------------------------------
+//     # Convert obstacles to grid coordinates
+//     # --------------------------------------------------------
+
+//     obstacle_grid_x, obstacle_grid_y = world_to_grid(
+//         world_x,
+//         world_y
+//     )
+
+//     # --------------------------------------------------------
+//     # Ray tracing
+//     # --------------------------------------------------------
+
+//     for gx, gy in zip(
+//         obstacle_grid_x,
+//         obstacle_grid_y
+//     ):
+
+//         if not valid_grid_cell(
+//             gx,
+//             gy
+//         ):
+//             continue
+
+//         ray = bresenham(
+//             rx,
+//             ry,
+//             int(gx),
+//             int(gy)
+//         )
+
+//         if len(ray) < 2:
+//             continue
+
+//         # Free space
+//         for cell_x, cell_y in ray[:-1]:
+
+//             if valid_grid_cell(
+//                 cell_x,
+//                 cell_y
+//             ):
+
+//                 occupancy_grid[
+//                     cell_y,
+//                     cell_x
+//                 ] += FREE_UPDATE
+
+//         # Occupied endpoint
+//         occupancy_grid[
+//             gy,
+//             gx
+//         ] += OCCUPIED_UPDATE
+
+//     np.clip(
+//         occupancy_grid,
+//         LOG_ODDS_MIN,
+//         LOG_ODDS_MAX,
+//         out=occupancy_grid
+//     )
+
+
+// # ============================================================
+// # LiDAR SEGMENTS
+// # ============================================================
+
+// def build_segments(
+//     angles_deg,
+//     distances_mm
+// ):
+
+//     if len(angles_deg) < 2:
+//         return []
+
+//     distances_m = (
+//         distances_mm / 1000.0
+//     )
+
+//     valid = (
+//         np.isfinite(distances_m)
+//         &
+//         (
+//             distances_m
+//             > MIN_DISTANCE_METERS
+//         )
+//         &
+//         (
+//             distances_m
+//             <= MAX_DISTANCE_METERS
+//         )
+//     )
+
+//     angles_deg = angles_deg[valid]
+//     distances_m = distances_m[valid]
+
+//     if len(angles_deg) < 2:
+//         return []
+
+//     if len(angles_deg) > MAX_SCAN_POINTS:
+
+//         indices = np.linspace(
+//             0,
+//             len(angles_deg) - 1,
+//             MAX_SCAN_POINTS
+//         ).astype(int)
+
+//         angles_deg = angles_deg[
+//             indices
+//         ]
+
+//         distances_m = distances_m[
+//             indices
+//         ]
+
+//     lx, ly = lidar_to_local(
+//         angles_deg,
+//         distances_m * 1000
+//     )
+
+//     points = np.column_stack(
+//         [lx, ly]
+//     )
+
+//     segments = []
+
+//     for i in range(
+//         len(points) - 1
+//     ):
+
+//         p1 = points[i]
+//         p2 = points[i + 1]
+
+//         if np.linalg.norm(
+//             p2 - p1
+//         ) <= CONNECT_DISTANCE:
+
+//             segments.append(
+//                 [p1, p2]
+//             )
+
+//     return segments
+
+
+// # ============================================================
+// # MAP DISPLAY
+// # ============================================================
+
+// def update_map_display():
+
+//     probability = (
+//         1.0
+//         -
+//         1.0
+//         /
+//         (
+//             1.0
+//             +
+//             np.exp(occupancy_grid)
+//         )
+//     )
+
+//     map_image.set_data(
+//         probability
+//     )
+
+
+// # ============================================================
+// # PATH UPDATE
+// # ============================================================
+
+// def update_robot_path(
+//     x,
+//     y
+// ):
+
+//     global last_path_x
+//     global last_path_y
+
+//     # First point
+//     if last_path_x is None:
+
+//         robot_path_x.append(x)
+//         robot_path_y.append(y)
+
+//         last_path_x = x
+//         last_path_y = y
+
+//         return
+
+//     distance = np.hypot(
+//         x - last_path_x,
+//         y - last_path_y
+//     )
+
+//     # Only add a point after actually moving
+//     if distance >= PATH_POINT_DISTANCE:
+
+//         robot_path_x.append(x)
+//         robot_path_y.append(y)
+
+//         last_path_x = x
+//         last_path_y = y
+
+//     # Limit path history
+//     if len(robot_path_x) > 5000:
+
+//         del robot_path_x[:-5000]
+//         del robot_path_y[:-5000]
+
+
+// # ============================================================
+// # MAIN PLOT UPDATE
+// # ============================================================
+
+// def update_plot(frame):
+
+//     global last_mapped_scan
+
+//     # --------------------------------------------------------
+//     # Drive
+//     # --------------------------------------------------------
+
+//     fwd, trn = publish_drive_commands()
+
+//     # --------------------------------------------------------
+//     # Copy pose safely
+//     # --------------------------------------------------------
+
+//     with data_lock:
+
+//         cx = robot_x
+//         cy = robot_y
+//         ch = robot_heading
+
+//         current_scan_counter = (
+//             scan_update_counter
+//         )
+
+//         logs_text = "\n".join(
+//             log_history
+//         )
+
+//     # --------------------------------------------------------
+//     # Logs
+//     # --------------------------------------------------------
+
+//     log_display.set_text(
+//         logs_text
+//         if logs_text
+//         else
+//         "Waiting for system logs..."
+//     )
+
+//     # --------------------------------------------------------
+//     # Get LiDAR
+//     # --------------------------------------------------------
+
+//     angles, distances = (
+//         get_combined_scan()
+//     )
+
+//     if len(angles) == 0:
+//         return
+
+//     distances_m = (
+//         distances / 1000.0
+//     )
+
+//     valid = (
+//         np.isfinite(angles)
+//         &
+//         np.isfinite(distances_m)
+//         &
+//         (
+//             distances_m
+//             > MIN_DISTANCE_METERS
+//         )
+//         &
+//         (
+//             distances_m
+//             <= MAX_DISTANCE_METERS
+//         )
+//     )
+
+//     valid_angles = angles[valid]
+//     valid_distances = distances_m[valid]
+
+//     # ========================================================
+//     # LOCAL LiDAR
+//     # ========================================================
+
+//     local_x, local_y = lidar_to_local(
+//         valid_angles,
+//         valid_distances * 1000
+//     )
+
+//     current_points = np.column_stack(
+//         [
+//             local_y,
+//             local_x
+//         ]
+//     )
+
+//     local_scan_points.set_offsets(
+//         current_points
+//     )
+
+//     segments_xy = build_segments(
+//         valid_angles,
+//         valid_distances * 1000
+//     )
+
+//     # build_segments returns:
+//     # [local_x, local_y]
+//     #
+//     # But the plot has:
+//     # horizontal = Y
+//     # vertical   = X
+//     #
+//     # Therefore swap them.
+
+//     segments_for_plot = [
+//         [
+//             [p1[1], p1[0]],
+//             [p2[1], p2[0]]
+//         ]
+//         for p1, p2 in segments_xy
+//     ]
+
+//     local_environment.set_segments(
+//         segments_for_plot
+//     )
+
+//     local_environment_glow.set_segments(
+//         segments_for_plot
+//     )
+
+//     # ========================================================
+//     # GLOBAL PATH
+//     # ========================================================
+
+//     update_robot_path(
+//         cx,
+//         cy
+//     )
+
+//     robot_path.set_data(
+//         robot_path_x,
+//         robot_path_y
+//     )
+
+//     # ========================================================
+//     # GLOBAL OCCUPANCY MAP
+//     # ========================================================
+
+//     if (
+//         current_scan_counter
+//         != last_mapped_scan
+//     ):
+
+//         last_mapped_scan = (
+//             current_scan_counter
+//         )
+
+//         if len(local_x) > MAX_SCAN_POINTS:
+
+//             indices = np.linspace(
+//                 0,
+//                 len(local_x) - 1,
+//                 MAX_SCAN_POINTS
+//             ).astype(int)
+
+//             mx = local_x[indices]
+//             my = local_y[indices]
+
+//         else:
+
+//             mx = local_x
+//             my = local_y
+
+//         update_occupancy_map(
+//             mx,
+//             my,
+//             cx,
+//             cy,
+//             ch
+//         )
+
+//         update_map_display()
+
+//     # ========================================================
+//     # GLOBAL ROBOT
+//     # ========================================================
+
+//     global_robot_body.set_center(
+//         (cx, cy)
+//     )
+
+//     # Global heading arrow
+//     #
+//     # This SHOULD rotate because this is the
+//     # global frame.
+
+//     rad = np.radians(ch)
+
+//     arrow_len = 1.2
+
+//     end_x = (
+//         cx
+//         +
+//         arrow_len * np.cos(rad)
+//     )
+
+//     end_y = (
+//         cy
+//         +
+//         arrow_len * np.sin(rad)
+//     )
+
+//     global_heading_line.set_data(
+//         [cx, end_x],
+//         [cy, end_y]
+//     )
+
+//     # Global X reference
+//     global_reference_x_line.set_data(
+//         [cx, cx + 1.0],
+//         [cy, cy]
+//     )
+
+//     theta_label.set_position(
+//         (
+//             cx + 0.3,
+//             cy + 0.3
+//         )
+//     )
+
+//     theta_label.set_text(
+//         f"θ = {ch:.1f}°"
+//     )
+
+//     # ========================================================
+//     # LOCAL ROBOT
+//     # ========================================================
+
+//     robot_marker.set_data(
+//         [0],
+//         [0]
+//     )
+
+//     # IMPORTANT:
+//     #
+//     # LOCAL FRAME DOES NOT USE GLOBAL HEADING.
+//     #
+//     # Robot is ALWAYS facing +X locally.
+//     #
+//     # Since the plot has:
+//     #   horizontal = local Y
+//     #   vertical   = local X
+//     #
+//     # forward is simply:
+//     #
+//     #   horizontal = 0
+//     #   vertical   = +0.5
+
+//     robot_direction.set_data(
+//         [0, 0],
+//         [0, 0.5]
+//     )
+
+//     # ========================================================
+//     # STATUS BAR
+//     # ========================================================
+
+//     status_text.set_text(
+//         f"● POSE: "
+//         f"X_G={cx:.2f}m | "
+//         f"Y_G={cy:.2f}m | "
+//         f"θ={ch:.1f}°   "
+//         f"| TELEOP: "
+//         f"Fwd={fwd:+.1f} "
+//         f"Turn={trn:+.1f} "
+//         f"| [R] Reset Frame & NavX"
+//     )
+
+
+// # ============================================================
+// # MAIN
+// # ============================================================
+
+// def main():
+
+//     global control_table
+
+//     global local_environment
+//     global local_environment_glow
+//     global local_scan_points
+
+//     global robot_marker
+//     global robot_direction
+//     global robot_path
+
+//     global global_robot_body
+//     global global_heading_line
+//     global global_reference_x_line
+//     global theta_label
+
+//     global map_image
+//     global status_text
+//     global log_display
+
+//     # --------------------------------------------------------
+//     # NetworkTables
+//     # --------------------------------------------------------
+
+//     print(
+//         f"Connecting to NetworkTables at {ROBOT_IP}..."
+//     )
+
+//     NetworkTables.initialize(
+//         server=ROBOT_IP
+//     )
+
+//     NetworkTables.setUpdateRate(
+//         0.010
+//     )
+
+//     lidar_table = NetworkTables.getTable(
+//         "Lidar"
+//     )
+
+//     pose_table = NetworkTables.getTable(
+//         POSE_TABLE_NAME
+//     )
+
+//     sd_table = NetworkTables.getTable(
+//         "SmartDashboard"
+//     )
+
+//     control_table = NetworkTables.getTable(
+//         CONTROL_TABLE_NAME
+//     )
+
+//     lidar_table.addEntryListener(
+//         value_changed_callback
+//     )
+
+//     pose_table.addEntryListener(
+//         value_changed_callback
+//     )
+
+//     for key_name in LOG_KEYS:
+
+//         sd_table.addEntryListener(
+//             log_callback,
+//             key=key_name
+//         )
+
+//     # --------------------------------------------------------
+//     # Figure
+//     # --------------------------------------------------------
+
+//     plt.style.use(
+//         "dark_background"
+//     )
+
+//     fig = plt.figure(
+//         figsize=(16, 9.5),
+//         facecolor="#080b0e"
+//     )
+
+//     fig.canvas.mpl_connect(
+//         "key_press_event",
+//         on_key_press
+//     )
+
+//     fig.canvas.mpl_connect(
+//         "key_release_event",
+//         on_key_release
+//     )
+
+//     gs = fig.add_gridspec(
+//         2,
+//         2,
+//         height_ratios=[3.2, 1.0],
+//         hspace=0.25,
+//         wspace=0.18
+//     )
+
+//     # ========================================================
+//     # GLOBAL MAP
+//     # ========================================================
+
+//     ax_map = fig.add_subplot(
+//         gs[0, 0]
+//     )
+
+//     ax_map.set_title(
+//         "GLOBAL FRAME (X_G , Y_G)",
+//         color="#00E5FF",
+//         fontsize=12,
+//         fontweight="bold",
+//         pad=10
+//     )
+
+//     ax_map.set_facecolor(
+//         "#04070a"
+//     )
+
+//     ax_map.set_aspect(
+//         "equal"
+//     )
+
+//     ax_map.set_xlim(
+//         -MAP_SIZE_METERS / 2,
+//         MAP_SIZE_METERS / 2
+//     )
+
+//     ax_map.set_ylim(
+//         -MAP_SIZE_METERS / 2,
+//         MAP_SIZE_METERS / 2
+//     )
+
+//     ax_map.set_xlabel(
+//         "X_G Axis (meters)",
+//         color="#80A0C0",
+//         fontweight="bold"
+//     )
+
+//     ax_map.set_ylabel(
+//         "Y_G Axis (meters)",
+//         color="#80A0C0",
+//         fontweight="bold"
+//     )
+
+//     ax_map.tick_params(
+//         colors="#507090"
+//     )
+
+//     ax_map.grid(
+//         color="#122535",
+//         linestyle="--",
+//         alpha=0.6
+//     )
+
+//     ax_map.axhline(
+//         0,
+//         color="#1E3A52",
+//         linewidth=1.2,
+//         linestyle=":"
+//     )
+
+//     ax_map.axvline(
+//         0,
+//         color="#1E3A52",
+//         linewidth=1.2,
+//         linestyle=":"
+//     )
+
+//     cyan_cmap = (
+//         LinearSegmentedColormap.from_list(
+//             "dark_cyan",
+//             [
+//                 "#04070a",
+//                 "#00E5FF"
+//             ]
+//         )
+//     )
+
+//     map_image = ax_map.imshow(
+//         np.zeros_like(
+//             occupancy_grid
+//         ),
+//         origin="lower",
+//         extent=[
+//             -MAP_SIZE_METERS / 2,
+//             MAP_SIZE_METERS / 2,
+//             -MAP_SIZE_METERS / 2,
+//             MAP_SIZE_METERS / 2
+//         ],
+//         cmap=cyan_cmap,
+//         vmin=0,
+//         vmax=1,
+//         alpha=0.65,
+//         interpolation="nearest"
+//     )
+
+//     # Path
+//     (
+//         robot_path,
+//     ) = ax_map.plot(
+//         [],
+//         [],
+//         color="#00E5FF",
+//         linewidth=1.5,
+//         alpha=0.75,
+//         label="Global Path"
+//     )
+
+//     # Robot
+//     global_robot_body = Circle(
+//         (0, 0),
+//         0.45,
+//         facecolor="#00E5FF",
+//         edgecolor="#FFFFFF",
+//         alpha=0.85,
+//         zorder=25
+//     )
+
+//     ax_map.add_patch(
+//         global_robot_body
+//     )
+
+//     # Heading
+//     (
+//         global_heading_line,
+//     ) = ax_map.plot(
+//         [],
+//         [],
+//         color="#FFEA00",
+//         linewidth=2.5,
+//         zorder=30,
+//         label="Heading (θ)"
+//     )
+
+//     # X-axis reference
+//     (
+//         global_reference_x_line,
+//     ) = ax_map.plot(
+//         [],
+//         [],
+//         color="#FFFFFF",
+//         linewidth=1.0,
+//         linestyle="--",
+//         zorder=26
+//     )
+
+//     theta_label = ax_map.text(
+//         0,
+//         0,
+//         "θ = 0.0°",
+//         color="#FFEA00",
+//         fontsize=10,
+//         fontweight="bold",
+//         zorder=35
+//     )
+
+//     # ========================================================
+//     # LOCAL LiDAR
+//     # ========================================================
+
+//     ax_local = fig.add_subplot(
+//         gs[0, 1]
+//     )
+
+//     ax_local.set_title(
+//         "LOCAL LiDAR FRAME",
+//         color="#00E5FF",
+//         fontsize=12,
+//         fontweight="bold",
+//         pad=10
+//     )
+
+//     ax_local.set_facecolor(
+//         "#04070a"
+//     )
+
+//     ax_local.set_aspect(
+//         "equal"
+//     )
+
+//     ax_local.set_xlim(
+//         -MAX_DISTANCE_METERS,
+//         MAX_DISTANCE_METERS
+//     )
+
+//     ax_local.set_ylim(
+//         -MAX_DISTANCE_METERS,
+//         MAX_DISTANCE_METERS
+//     )
+
+//     # IMPORTANT:
+//     #
+//     # Horizontal = local Y
+//     # Vertical   = local X
+
+//     ax_local.set_xlabel(
+//         "+Y (Right) / -Y (Left) [m]",
+//         color="#80A0C0"
+//     )
+
+//     ax_local.set_ylabel(
+//         "+X (Forward) / -X (Back) [m]",
+//         color="#80A0C0"
+//     )
+
+//     ax_local.tick_params(
+//         colors="#507090"
+//     )
+
+//     ax_local.grid(
+//         color="#122535",
+//         linestyle="--",
+//         alpha=0.6
+//     )
+
+//     local_environment_glow = (
+//         LineCollection(
+//             [],
+//             linewidths=6,
+//             color="#00E5FF",
+//             alpha=0.08,
+//             capstyle="round"
+//         )
+//     )
+
+//     ax_local.add_collection(
+//         local_environment_glow
+//     )
+
+//     local_environment = (
+//         LineCollection(
+//             [],
+//             linewidths=1.8,
+//             color="#00E5FF",
+//             alpha=0.9,
+//             capstyle="round"
+//         )
+//     )
+
+//     ax_local.add_collection(
+//         local_environment
+//     )
+
+//     local_scan_points = ax_local.scatter(
+//         [],
+//         [],
+//         s=5,
+//         color="#A5F3FC",
+//         alpha=0.5,
+//         edgecolors="none"
+//     )
+
+//     # Robot
+//     (
+//         robot_marker,
+//     ) = ax_local.plot(
+//         [0],
+//         [0],
+//         marker="o",
+//         markersize=8,
+//         color="#00E5FF",
+//         markeredgecolor="white"
+//     )
+
+//     # Local forward direction
+//     (
+//         robot_direction,
+//     ) = ax_local.plot(
+//         [0, 0],
+//         [0, 0.5],
+//         color="#FFEA00",
+//         linewidth=2
+//     )
+
+//     # Range rings
+//     for r in range(1, 6):
+
+//         ax_local.add_patch(
+//             Circle(
+//                 (0, 0),
+//                 r,
+//                 fill=False,
+//                 edgecolor="#122535",
+//                 linewidth=0.8,
+//                 linestyle="--"
+//             )
+//         )
+
+//         ax_local.text(
+//             0.05,
+//             r,
+//             f"{r}m",
+//             color="#3A5D7C",
+//             fontsize=7
+//         )
+
+//     # ========================================================
+//     # CONSOLE
+//     # ========================================================
+
+//     ax_log = fig.add_subplot(
+//         gs[1, :]
+//     )
+
+//     ax_log.set_title(
+//         "SYSTEM CONSOLE LOGS",
+//         color="#00E5FF",
+//         fontsize=10,
+//         fontweight="bold",
+//         loc="left"
+//     )
+
+//     ax_log.set_facecolor(
+//         "#020305"
+//     )
+
+//     ax_log.tick_params(
+//         left=False,
+//         bottom=False,
+//         labelleft=False,
+//         labelbottom=False
+//     )
+
+//     log_display = ax_log.text(
+//         0.01,
+//         0.85,
+//         "Initializing NetworkTables listener...",
+//         color="#00E5FF",
+//         fontsize=8.5,
+//         family="monospace",
+//         verticalalignment="top"
+//     )
+
+//     # ========================================================
+//     # STATUS BAR
+//     # ========================================================
+
+//     status_text = fig.text(
+//         0.02,
+//         0.015,
+//         "● LIVE",
+//         color="#00E5FF",
+//         fontsize=9.5,
+//         fontweight="bold"
+//     )
+
+//     # ========================================================
+//     # ANIMATION
+//     # ========================================================
+
+//     ani = FuncAnimation(
+//         fig,
+//         update_plot,
+//         interval=50,
+//         blit=False,
+//         cache_frame_data=False
+//     )
+
+//     plt.tight_layout(
+//         rect=[
+//             0,
+//             0.03,
+//             1,
+//             0.98
+//         ]
+//     )
+
+//     plt.show()
+
+
+// # ============================================================
+// # ENTRY POINT
+// # ============================================================
+
+// if __name__ == "__main__":
+//     main()
