@@ -49,6 +49,13 @@ POSE_HEADING_KEY = "PoseHeading"
 LOG_KEYS = ["DriveLog", "RobotContainer", "LidarLog", "IRLog"]
 OBSTACLE_WARNING_DISTANCE = 0.75
 
+# ------------------------------------------------------------
+# DRIVE CONTROL CONFIGURATION
+# ------------------------------------------------------------
+CONTROL_TABLE_NAME = "DriveControls"
+MAX_LINEAR_SPEED = 1.0   # Scale from -1.0 to 1.0 (or m/s)
+MAX_ANGULAR_SPEED = 1.0  # Scale from -1.0 to 1.0 (or rad/s)
+
 # ============================================================
 # THREAD SAFETY & GLOBAL DATA
 # ============================================================
@@ -74,6 +81,57 @@ robot_path_x, robot_path_y = [], []
 # Circular buffer to store the last 10 log messages for GUI rendering
 log_history = collections.deque(maxlen=10)
 
+# Active key states for robot teleoperation
+pressed_keys = set()
+control_table = None
+
+# ============================================================
+# KEYBOARD CONTROL CALLBACKS
+# ============================================================
+
+
+def on_key_press(event):
+    if event.key is not None:
+        key = event.key.lower()
+        if key == " ":
+            pressed_keys.clear()
+        else:
+            pressed_keys.add(key)
+
+
+def on_key_release(event):
+    if event.key is not None:
+        key = event.key.lower()
+        pressed_keys.discard(key)
+
+
+def publish_drive_commands():
+    if control_table is None:
+        return 0.0, 0.0, 0.0
+
+    forward = 0.0
+    strafe = 0.0
+    turn = 0.0
+
+    if "w" in pressed_keys or "up" in pressed_keys:
+        forward += MAX_LINEAR_SPEED
+    if "s" in pressed_keys or "down" in pressed_keys:
+        forward -= MAX_LINEAR_SPEED
+    if "a" in pressed_keys or "left" in pressed_keys:
+        strafe -= MAX_LINEAR_SPEED
+    if "d" in pressed_keys or "right" in pressed_keys:
+        strafe += MAX_LINEAR_SPEED
+    if "r" in pressed_keys:
+        turn -= MAX_ANGULAR_SPEED
+    if "t" in pressed_keys:
+        turn += MAX_ANGULAR_SPEED
+
+    control_table.putNumber("CmdForward", forward)
+    control_table.putNumber("CmdStrafe", strafe)
+    control_table.putNumber("CmdTurn", turn)
+
+    return forward, strafe, turn
+
 
 # ============================================================
 # NETWORKTABLE CALLBACKS
@@ -81,20 +139,6 @@ log_history = collections.deque(maxlen=10)
 
 
 def value_changed_callback(table, key, value, isNew):
-    # Optional Python variables to log individual debug paths:
-    odo_x, odo_y = 0.0, 0.0
-    lidar_x, lidar_y = 0.0, 0.0
-
-    # Inside value_changed_callback(table, key, value, isNew):
-    if key == "OdoPoseX":
-        odo_x = float(value)
-    elif key == "OdoPoseY":
-        odo_y = float(value)
-    elif key == "LidarPoseX":
-        lidar_x = float(value)
-    elif key == "LidarPoseY":
-        lidar_y = float(value)
-        
     global angles_1, distances_1, angles_2, distances_2
     global robot_x, robot_y, robot_heading
     global scan_update_counter
@@ -275,6 +319,9 @@ def update_map_display():
 def update_plot(frame):
     global last_mapped_scan
 
+    # Publish teleop control commands from keyboard state
+    fwd, strf, trn = publish_drive_commands()
+
     with data_lock:
         cx, cy, ch = robot_x, robot_y, robot_heading
         current_scan_counter = scan_update_counter
@@ -306,9 +353,7 @@ def update_plot(frame):
     local_environment.set_segments(segments)
     local_environment_glow.set_segments(segments)
 
-    # ------------------------------------------------------------
-    # NETWORKTABLES-BASED PATH TRACING (Java Localization)
-    # ------------------------------------------------------------
+    # Path Tracing
     robot_path_x.append(cx)
     robot_path_y.append(cy)
     if len(robot_path_x) > 5000:
@@ -317,7 +362,7 @@ def update_plot(frame):
 
     robot_path.set_data(robot_path_x, robot_path_y)
 
-    # Update Occupancy Grid Map using Java Pose Data
+    # Update Occupancy Grid Map
     if current_scan_counter != last_mapped_scan:
         last_mapped_scan = current_scan_counter
 
@@ -339,12 +384,13 @@ def update_plot(frame):
         [0, 0.5 * np.sin(heading_rad)], [0, 0.5 * np.cos(heading_rad)]
     )
 
-    # Update Global Robot Marker from NetworkTables Pose
+    # Update Global Robot Marker
     global_robot_marker.set_data([cx], [cy])
 
-    # Status Bar Updates
+    # Status Bar Updates (with active keyboard command readout)
     status_text.set_text(
-        f"● NT Pose   X: {cx:.2f} m   Y: {cy:.2f} m   Heading: {ch:.1f}°"
+        f"● NT Pose X: {cx:.2f}m Y: {cy:.2f}m Heading: {ch:.1f}° | "
+        f"CMD Fwd: {fwd:+.1f} Str: {strf:+.1f} Trn: {trn:+.1f}"
     )
 
     if np.any(valid_distances < OBSTACLE_WARNING_DISTANCE):
@@ -359,6 +405,8 @@ def update_plot(frame):
 
 
 def main():
+    global control_table
+
     print(f"Connecting to NetworkTables at {ROBOT_IP}...")
     NetworkTables.initialize(server=ROBOT_IP)
     NetworkTables.setUpdateRate(0.010)
@@ -366,6 +414,7 @@ def main():
     lidar_table = NetworkTables.getTable("Lidar")
     pose_table = NetworkTables.getTable(POSE_TABLE_NAME)
     sd_table = NetworkTables.getTable("SmartDashboard")
+    control_table = NetworkTables.getTable(CONTROL_TABLE_NAME)
 
     lidar_table.addEntryListener(value_changed_callback)
     pose_table.addEntryListener(value_changed_callback)
@@ -373,13 +422,18 @@ def main():
     for key_name in LOG_KEYS:
         sd_table.addEntryListener(log_callback, key=key_name)
 
-    print("Connected. Launching visualizer with embedded log window...")
+    print("Connected. Launching visualizer with keyboard controls...")
 
     global local_environment, local_environment_glow, local_scan_points
     global robot_marker, robot_direction, robot_path, global_robot_marker
     global map_image, status_text, obstacle_warning, log_display
 
     fig = plt.figure(figsize=(15, 9))
+
+    # Connect keyboard listeners to the Matplotlib window canvas
+    fig.canvas.mpl_connect("key_press_event", on_key_press)
+    fig.canvas.mpl_connect("key_release_event", on_key_release)
+
     gs = fig.add_gridspec(2, 2, height_ratios=[3, 1])
 
     # 1. Global Map Subplot

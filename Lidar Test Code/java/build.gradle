@@ -73,7 +73,7 @@ jar {
 // }
 
 task launchMapDisplay(type: Exec) {
-    commandLine 'cmd', '/c', 'start', 'cmd', '/k', 'python lidar_360_viewer.py.txt'
+    commandLine 'cmd', '/c', 'start', 'cmd', '/k', 'python lidar_360_viewer.py'
 }
 // Attach to task execution graph once Gradle finishes evaluating all project extensions
 tasks.named('deploy'){
