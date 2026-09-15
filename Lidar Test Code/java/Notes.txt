@@ -1,0 +1,10 @@
+Notes:
+Not sure why holodrive is being affected by the * -1 in the encoders?
+Not sure why sin and cos have to be flipped in the localisation
+Same for the negative signs.
+Also not sure why the calculated distance must *2. very strange.
+
+TODO: 
+- Fix the LIDAR Drift
+- Localisation fusion
+- Use localisation with PID
