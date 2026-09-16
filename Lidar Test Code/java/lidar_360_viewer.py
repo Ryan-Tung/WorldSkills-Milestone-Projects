@@ -97,11 +97,9 @@ MAX_ANGULAR_SPEED = 0.2
 
 data_lock = threading.Lock()
 
-angles_1 = np.array([])
-distances_1 = np.array([])
-
-angles_2 = np.array([])
-distances_2 = np.array([])
+# Unified single-array LiDAR buffers
+scan_angles = np.array([])
+scan_distances = np.array([])
 
 
 # Raw NetworkTables pose
@@ -356,11 +354,8 @@ def value_changed_callback(
     isNew
 ):
 
-    global angles_1
-    global distances_1
-
-    global angles_2
-    global distances_2
+    global scan_angles
+    global scan_distances
 
     global raw_robot_x
     global raw_robot_y
@@ -375,33 +370,19 @@ def value_changed_callback(
     with data_lock:
 
         # ----------------------------------------------------
-        # LiDAR
+        # LiDAR (Single-Array Updates)
         # ----------------------------------------------------
 
-        if key == "ScanAngles_Part1":
+        if key == "ScanAngles":
 
-            angles_1 = np.asarray(
+            scan_angles = np.asarray(
                 value,
                 dtype=float
             )
 
-        elif key == "ScanDistances_Part1":
+        elif key == "ScanDistances":
 
-            distances_1 = np.asarray(
-                value,
-                dtype=float
-            )
-
-        elif key == "ScanAngles_Part2":
-
-            angles_2 = np.asarray(
-                value,
-                dtype=float
-            )
-
-        elif key == "ScanDistances_Part2":
-
-            distances_2 = np.asarray(
+            scan_distances = np.asarray(
                 value,
                 dtype=float
             )
@@ -467,63 +448,44 @@ def log_callback(
 
 
 # ============================================================
-# COMBINE LiDAR SCANS
+# GET LiDAR SCAN DATA
 # ============================================================
 
-def get_combined_scan():
+def get_scan_data():
 
     with data_lock:
 
-        a1 = angles_1.copy()
-        d1 = distances_1.copy()
+        a = scan_angles.copy()
+        d = scan_distances.copy()
 
-        a2 = angles_2.copy()
-        d2 = distances_2.copy()
-
-    n1 = min(
-        len(a1),
-        len(d1)
+    n = min(
+        len(a),
+        len(d)
     )
 
-    n2 = min(
-        len(a2),
-        len(d2)
-    )
-
-    if n1 == 0 and n2 == 0:
+    if n == 0:
 
         return (
             np.array([]),
             np.array([])
         )
 
-    angles = np.concatenate(
-        [
-            a1[:n1],
-            a2[:n2]
-        ]
-    )
-
-    distances = np.concatenate(
-        [
-            d1[:n1],
-            d2[:n2]
-        ]
-    )
+    a = a[:n]
+    d = d[:n]
 
     valid = (
-        np.isfinite(angles)
-        & np.isfinite(distances)
+        np.isfinite(a)
+        & np.isfinite(d)
     )
 
-    angles = angles[valid]
-    distances = distances[valid]
+    a = a[valid]
+    d = d[valid]
 
-    order = np.argsort(angles)
+    order = np.argsort(a)
 
     return (
-        angles[order],
-        distances[order]
+        a[order],
+        d[order]
     )
 
 
@@ -585,7 +547,7 @@ def local_to_global(
         + local_x * np.cos(heading)
         + local_y * np.sin(heading)
     )
- 
+
     global_y = (
         y_robot
         + local_x * np.sin(heading)
@@ -984,7 +946,7 @@ def update_plot(frame):
     # --------------------------------------------------------
 
     angles, distances = (
-        get_combined_scan()
+        get_scan_data()
     )
 
     if len(angles) == 0:
@@ -1037,15 +999,6 @@ def update_plot(frame):
         valid_angles,
         valid_distances * 1000
     )
-
-    # build_segments returns:
-    # [local_x, local_y]
-    #
-    # But the plot has:
-    # horizontal = Y
-    # vertical   = X
-    #
-    # Therefore swap them.
 
     segments_for_plot = [
         [
@@ -1124,11 +1077,6 @@ def update_plot(frame):
         (cx, cy)
     )
 
-    # Global heading arrow
-    #
-    # This SHOULD rotate because this is the
-    # global frame.
-
     rad = np.radians(ch)
 
     arrow_len = 1.2
@@ -1150,7 +1098,6 @@ def update_plot(frame):
         [cy, end_y]
     )
 
-    # Global X reference
     global_reference_x_line.set_data(
         [cx, cx + 1.0],
         [cy, cy]
@@ -1175,21 +1122,6 @@ def update_plot(frame):
         [0],
         [0]
     )
-
-    # IMPORTANT:
-    #
-    # LOCAL FRAME DOES NOT USE GLOBAL HEADING.
-    #
-    # Robot is ALWAYS facing +X locally.
-    #
-    # Since the plot has:
-    #   horizontal = local Y
-    #   vertical   = local X
-    #
-    # forward is simply:
-    #
-    #   horizontal = 0
-    #   vertical   = +0.5
 
     robot_direction.set_data(
         [0, 0],
@@ -1506,11 +1438,6 @@ def main():
         -MAX_DISTANCE_METERS,
         MAX_DISTANCE_METERS
     )
-
-    # IMPORTANT:
-    #
-    # Horizontal = local Y
-    # Vertical   = local X
 
     ax_local.set_xlabel(
         "+Y (Right) / -Y (Left) [m]",

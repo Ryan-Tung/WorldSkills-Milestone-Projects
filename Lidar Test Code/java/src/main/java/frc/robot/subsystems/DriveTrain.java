@@ -76,6 +76,11 @@ public class DriveTrain extends SubsystemBase
     private double lidarPoseY = 0.0;
     private double lidarPoseHeading = 0.0; // In degrees
 
+    // Buffers & Loop Counter for Zero-Allocation Throttled Telemetry
+    private double[] ntAnglesBuffer = new double[0];
+    private double[] ntDistancesBuffer = new double[0];
+    private int loopCounter = 0;
+
     // ============================================================
     // MOTORS & NAVX
     // ============================================================
@@ -181,13 +186,14 @@ public class DriveTrain extends SubsystemBase
 
     /**
      * Converts raw scan arrays (degrees, mm) to Cartesian points (meters).
+     * Downsampled (step size = 10) to optimize ICP execution speed when moving.
      */
     private List<Point2D> extractLocalScanPoints(Lidar.ScanData scan) {
         List<Point2D> points = new ArrayList<>();
         if (scan == null || scan.distance == null || scan.angle == null) return points;
 
         int len = Math.min(scan.distance.length, scan.angle.length);
-        for (int i = 0; i < len; i += 1) {
+        for (int i = 0; i < len; i += 10) {
             double distMeters = scan.distance[i] / 1000.0;
             double angleDeg = scan.angle[i] - LIDAR_OFFSET_DEGREES;
             if (Double.isFinite(distMeters) && Double.isFinite(angleDeg)
@@ -201,6 +207,7 @@ public class DriveTrain extends SubsystemBase
         }
         return points;
     }
+
     public double getAverageForwardEncoderDistance() { return (getLeftEncoderDistance() + getRightEncoderDistance()) / 2.0; }
 
     /**
@@ -312,7 +319,7 @@ public class DriveTrain extends SubsystemBase
         double currentYaw = getYaw();
         double deltaYawDeg = normalizeAngle(currentYaw - lastYaw);
 
-        // 2. Only run ICP pose integration if the physical wheels or heading actually moved
+        // Instantly returns if stationary (0 ICP calculations performed)
         if (encDelta < ENCODER_MOTION_THRESHOLD_METERS && Math.abs(deltaYawDeg) < 0.2) {
             prevScanPoints = currentPoints;
             lastYaw = currentYaw;
@@ -333,7 +340,7 @@ public class DriveTrain extends SubsystemBase
                 alignedPoints.add(new Point2D(rx, ry));
             }
     
-            Transform2D step = icp2D(alignedPoints, prevScanPoints, 10, 1e-3);
+            Transform2D step = icp2D(alignedPoints, prevScanPoints, 5, 1e-2);
     
             lidarPoseHeading = currentYaw;
             double headingRad = Math.toRadians(lidarPoseHeading);
@@ -432,71 +439,73 @@ public class DriveTrain extends SubsystemBase
     @Override
     public void periodic() {
         processNetworkTableDrive();
+        loopCounter++;
 
+        // 1. Read LiDAR hardware & update odometry (Instantly returns when stationary)
         if (scanning) {
-            Lidar.ScanData currentScan = lidar.getData();
-            if (currentScan != null) {
-                scanData = currentScan;
-                updateLidarOdometry();
+            try {
+                Lidar.ScanData currentScan = lidar.getData();
+                if (currentScan != null && currentScan.distance != null && currentScan.angle != null) {
+                    scanData = currentScan;
+                    updateLidarOdometry();
+                }
+            } catch (Exception e) {
+                // Prevents hardware/USB disconnects from crashing the robot loop
             }
         }
 
+        // 2. NavX Reset Command Trigger
         if (controlTable.getEntry("ResetNavX").getBoolean(false)) {
             resetYaw();
             lidarPoseHeading = 0.0;
             controlTable.getEntry("ResetNavX").setBoolean(false);
         }
 
-        // Telemetry
-        leftEncoderValue.setDouble(getLeftEncoderDistance());
-        rightEncoderValue.setDouble(getRightEncoderDistance());
-        backEncoderValue.setDouble(getBackEncoderDistance());
-        gyroValue.setDouble(getYaw());
-        poseXValue.setDouble(lidarPoseX);
-        poseYValue.setDouble(lidarPoseY);
-        poseHeadingValue.setDouble(lidarPoseHeading);
-
-        SmartDashboard.putNumber("Pose X", lidarPoseX);
-        SmartDashboard.putNumber("Pose Y", lidarPoseY);
-        SmartDashboard.putNumber("Pose Heading", getYaw());
-
-        for (int i = 0; i < 4; i++) {
-            SmartDashboard.putNumber("Cobra Ch" + i, getCobraVoltage(i));
-        }
-
+        // 3. High-Frequency Pose Telemetry (Lightweight: 3 primitive doubles at 50Hz)
         driveTable.getEntry("PoseX").setDouble(lidarPoseX);
         driveTable.getEntry("PoseY").setDouble(lidarPoseY);
         driveTable.getEntry("PoseHeading").setDouble(getYaw());
 
-        // Stream raw scan parts
-        Lidar.ScanData streamScan = scanData;
-        if (scanning && streamScan != null && streamScan.distance != null && streamScan.angle != null) {
-            float[] distances = streamScan.distance;
-            float[] angles = streamScan.angle;
-            int length = Math.min(distances.length, angles.length);
+        // 4. Throttle Dashboard Updates & NetworkTable Array Streaming to 10Hz (Every 5th frame)
+        if (loopCounter % 5 == 0) {
+            // Shuffleboard & Dashboard Updates
+            leftEncoderValue.setDouble(getLeftEncoderDistance());
+            rightEncoderValue.setDouble(getRightEncoderDistance());
+            backEncoderValue.setDouble(getBackEncoderDistance());
+            gyroValue.setDouble(getYaw());
+            poseXValue.setDouble(lidarPoseX);
+            poseYValue.setDouble(lidarPoseY);
+            poseHeadingValue.setDouble(lidarPoseHeading);
 
-            if (length > 0) {
-                int mid = length / 2;
-                int len2 = length - mid;
+            SmartDashboard.putNumber("Pose X", lidarPoseX);
+            SmartDashboard.putNumber("Pose Y", lidarPoseY);
+            SmartDashboard.putNumber("Pose Heading", getYaw());
 
-                double[] angles1 = new double[mid];
-                double[] distances1 = new double[mid];
-                for (int i = 0; i < mid; i++) {
-                    angles1[i] = angles[i] - LIDAR_OFFSET_DEGREES;
-                    distances1[i] = distances[i];
+            for (int i = 0; i < 4; i++) {
+                SmartDashboard.putNumber("Cobra Ch" + i, getCobraVoltage(i));
+            }
+
+            // Zero-allocation unified single-array LiDAR streaming for Python viewer
+            if (scanning && scanData != null && scanData.distance != null && scanData.angle != null) {
+                float[] distances = scanData.distance;
+                float[] angles = scanData.angle;
+                int length = Math.min(distances.length, angles.length);
+
+                if (length > 0) {
+                    // Reuse buffers or resize once if array length changes
+                    if (ntAnglesBuffer.length != length) {
+                        ntAnglesBuffer = new double[length];
+                        ntDistancesBuffer = new double[length];
+                    }
+
+                    for (int i = 0; i < length; i++) {
+                        ntAnglesBuffer[i] = angles[i] - LIDAR_OFFSET_DEGREES;
+                        ntDistancesBuffer[i] = distances[i];
+                    }
+
+                    lidarTable.getEntry("ScanAngles").setDoubleArray(ntAnglesBuffer);
+                    lidarTable.getEntry("ScanDistances").setDoubleArray(ntDistancesBuffer);
                 }
-
-                double[] angles2 = new double[len2];
-                double[] distances2 = new double[len2];
-                for (int i = 0; i < len2; i++) {
-                    angles2[i] = angles[mid + i] - LIDAR_OFFSET_DEGREES;
-                    distances2[i] = distances[mid + i];
-                }
-
-                lidarTable.getEntry("ScanAngles_Part1").setDoubleArray(angles1);
-                lidarTable.getEntry("ScanDistances_Part1").setDoubleArray(distances1);
-                lidarTable.getEntry("ScanAngles_Part2").setDoubleArray(angles2);
-                lidarTable.getEntry("ScanDistances_Part2").setDoubleArray(distances2);
             }
         }
     }
