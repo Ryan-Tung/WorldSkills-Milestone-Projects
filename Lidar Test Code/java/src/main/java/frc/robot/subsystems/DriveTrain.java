@@ -187,7 +187,7 @@ public class DriveTrain extends SubsystemBase
         if (scan == null || scan.distance == null || scan.angle == null) return points;
 
         int len = Math.min(scan.distance.length, scan.angle.length);
-        for (int i = 0; i < len; i += 3) {
+        for (int i = 0; i < len; i += 1) {
             double distMeters = scan.distance[i] / 1000.0;
             double angleDeg = scan.angle[i] - LIDAR_OFFSET_DEGREES;
             if (Double.isFinite(distMeters) && Double.isFinite(angleDeg)
@@ -341,8 +341,8 @@ public class DriveTrain extends SubsystemBase
             double dxGlobal = step.dx * Math.sin(headingRad) + step.dy * Math.cos(headingRad);
             double dyGlobal = step.dx * Math.cos(headingRad) + step.dy * Math.sin(headingRad);
     
-            lidarPoseX -= dxGlobal * 2;
-            lidarPoseY -= dyGlobal * 2;
+            lidarPoseX += dxGlobal * 2;
+            lidarPoseY += dyGlobal * 2;
         }
     
         prevScanPoints = currentPoints;

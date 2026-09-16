@@ -88,7 +88,7 @@ LOG_KEYS = [
 CONTROL_TABLE_NAME = "DriveControls"
 
 MAX_LINEAR_SPEED = 0.5
-MAX_ANGULAR_SPEED = 0.5
+MAX_ANGULAR_SPEED = 0.2
 
 
 # ============================================================
