@@ -68,6 +68,7 @@ public class DriveTrain extends SubsystemBase
     private Lidar lidar;
     private Lidar.ScanData scanData;
     public boolean scanning = true;
+    private static final double LIDAR_OFFSET_DEGREES = 13.0; // Physical offset to the right
 
     private List<Point2D> prevScanPoints = null;
     private double lidarPoseX = 0.0;
@@ -187,8 +188,8 @@ public class DriveTrain extends SubsystemBase
         int len = Math.min(scan.distance.length, scan.angle.length);
         for (int i = 0; i < len; i++) {
             double distMeters = scan.distance[i] / 1000.0;
-            double angleDeg = scan.angle[i];
-
+            // Subtract offset to rotate scan points back to robot centerline
+            double angleDeg = scan.angle[i] - LIDAR_OFFSET_DEGREES;
             if (Double.isFinite(distMeters) && Double.isFinite(angleDeg)
                 && distMeters >= MIN_DISTANCE_METERS && distMeters <= MAX_DISTANCE_METERS) {
                 
@@ -300,6 +301,9 @@ public class DriveTrain extends SubsystemBase
     /**
      * Updates global pose estimated from successive LiDAR scan frames.
      */
+    private double lastEncoderDistance = 0.0;
+    private static final double ENCODER_MOTION_THRESHOLD_METERS = 0.002; // 2 mm physical movement required
+
     private void updateLidarOdometry() {
         if (scanData == null) return;
 
@@ -307,18 +311,25 @@ public class DriveTrain extends SubsystemBase
         if (currentPoints.size() < 10) return;
 
         if (prevScanPoints != null && prevScanPoints.size() >= 10) {
-            Transform2D step = icp2D(currentPoints, prevScanPoints, 20, 1e-4);
+            // 1. Calculate physical wheel movement since last frame
+            double currentEncoderDistance = getAverageForwardEncoderDistance();
+            double encoderDelta = Math.abs(currentEncoderDistance - lastEncoderDistance);
 
-            double dHeadingDeg = Math.toDegrees(step.dThetaRad);
-            double headingRad = Math.toRadians(lidarPoseHeading);
+            // 2. Only run ICP pose integration if the physical wheels actually moved
+            if (encoderDelta >= ENCODER_MOTION_THRESHOLD_METERS) {
+                Transform2D step = icp2D(currentPoints, prevScanPoints, 20, 1e-4);
 
-            // Convert local frame translation to global coordinates
-            double dxGlobal = step.dx * Math.sin(headingRad) + step.dy * Math.cos(headingRad);
-            double dyGlobal = step.dx * Math.cos(headingRad) + step.dy * Math.sin(headingRad);
+                lidarPoseHeading = getYaw();
+                double headingRad = Math.toRadians(lidarPoseHeading);
 
-            lidarPoseX -= dxGlobal * 2;
-            lidarPoseY -= dyGlobal * 2;
-            lidarPoseHeading = normalizeAngle(lidarPoseHeading + dHeadingDeg);
+                double dxGlobal = step.dx * Math.sin(headingRad) + step.dy * Math.cos(headingRad);
+                double dyGlobal = step.dx * Math.cos(headingRad) + step.dy * Math.sin(headingRad);
+
+                lidarPoseX += dxGlobal * 2;
+                lidarPoseY += dyGlobal * 2;
+
+                lastEncoderDistance = currentEncoderDistance;
+            }
         }
 
         prevScanPoints = currentPoints;
@@ -448,14 +459,14 @@ public class DriveTrain extends SubsystemBase
                 double[] angles1 = new double[mid];
                 double[] distances1 = new double[mid];
                 for (int i = 0; i < mid; i++) {
-                    angles1[i] = scanData.angle[i];
+                    angles1[i] = scanData.angle[i] - LIDAR_OFFSET_DEGREES;
                     distances1[i] = scanData.distance[i];
                 }
 
                 double[] angles2 = new double[len2];
                 double[] distances2 = new double[len2];
                 for (int i = 0; i < len2; i++) {
-                    angles2[i] = scanData.angle[mid + i];
+                    angles2[i] = scanData.angle[mid + i] - LIDAR_OFFSET_DEGREES;
                     distances2[i] = scanData.distance[mid + i];
                 }
 
