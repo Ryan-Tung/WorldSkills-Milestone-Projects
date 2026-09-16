@@ -8,3 +8,4 @@ TODO:
 - Fix the LIDAR Drift
 - Localisation fusion
 - Use localisation with PID
+- Theres a 13 degree offset from real life.

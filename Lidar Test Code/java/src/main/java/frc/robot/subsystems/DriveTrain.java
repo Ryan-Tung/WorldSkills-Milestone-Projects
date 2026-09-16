@@ -67,7 +67,7 @@ public class DriveTrain extends SubsystemBase
     // ============================================================
     private Lidar lidar;
     private Lidar.ScanData scanData;
-    public boolean scanning = true;
+    public boolean scanning = false;
     private static final double LIDAR_OFFSET_DEGREES = 13.0; // Physical offset to the right
 
     private List<Point2D> prevScanPoints = null;
@@ -109,6 +109,7 @@ public class DriveTrain extends SubsystemBase
         lidar = new Lidar(Lidar.Port.kUSB2);
         lidar.clusterConfig(50.0f, 5);
         lidar.enableFilter(Lidar.Filter.kCLUSTER, false);
+        startScan();
 
         leftMotor = new TitanQuad(Constants.TITAN_ID, Constants.M3);
         rightMotor = new TitanQuad(Constants.TITAN_ID, Constants.M0);
@@ -139,7 +140,6 @@ public class DriveTrain extends SubsystemBase
             for (int ch = 0; ch < 4; ch++) {
                 sums[ch] += cobra.getVoltage(ch);
             }
-            try { Thread.sleep(10); } catch (InterruptedException ignored) {}
         }
 
         for (int ch = 0; ch < 4; ch++) {
@@ -186,9 +186,8 @@ public class DriveTrain extends SubsystemBase
         if (scan == null || scan.distance == null || scan.angle == null) return points;
 
         int len = Math.min(scan.distance.length, scan.angle.length);
-        for (int i = 0; i < len; i++) {
+        for (int i = 0; i < len; i += 3) {
             double distMeters = scan.distance[i] / 1000.0;
-            // Subtract offset to rotate scan points back to robot centerline
             double angleDeg = scan.angle[i] - LIDAR_OFFSET_DEGREES;
             if (Double.isFinite(distMeters) && Double.isFinite(angleDeg)
                 && distMeters >= MIN_DISTANCE_METERS && distMeters <= MAX_DISTANCE_METERS) {
@@ -205,7 +204,6 @@ public class DriveTrain extends SubsystemBase
 
     /**
      * 2D Iterative Closest Point algorithm for scan matching.
-     * Computes the relative transformation (R, t) between source and destination scans.
      */
     private Transform2D icp2D(List<Point2D> src, List<Point2D> dst, int maxIterations, double tolerance) {
         if (src.size() < 10 || dst.size() < 10) {
@@ -223,7 +221,6 @@ public class DriveTrain extends SubsystemBase
             List<Point2D> validSrc = new ArrayList<>();
             List<Point2D> matchedDst = new ArrayList<>();
 
-            // 1. Find nearest neighbors
             for (Point2D s : currSrc) {
                 double minSqDist = Double.MAX_VALUE;
                 Point2D bestMatch = null;
@@ -236,7 +233,6 @@ public class DriveTrain extends SubsystemBase
                     }
                 }
 
-                // Reject outlier points further than 0.5 meters
                 if (bestMatch != null && Math.sqrt(minSqDist) < 0.5) {
                     validSrc.add(s);
                     matchedDst.add(bestMatch);
@@ -245,7 +241,6 @@ public class DriveTrain extends SubsystemBase
 
             if (validSrc.size() < 5) break;
 
-            // 2. Compute centroids
             double csX = 0, csY = 0, cdX = 0, cdY = 0;
             int n = validSrc.size();
             for (int i = 0; i < n; i++) {
@@ -257,7 +252,6 @@ public class DriveTrain extends SubsystemBase
             csX /= n; csY /= n;
             cdX /= n; cdY /= n;
 
-            // 3. 2D Cross-Covariance Alignment Matrix H
             double h00 = 0, h01 = 0, h10 = 0, h11 = 0;
             for (int i = 0; i < n; i++) {
                 double sx = validSrc.get(i).x - csX;
@@ -271,16 +265,13 @@ public class DriveTrain extends SubsystemBase
                 h11 += sy * dy;
             }
 
-            // Extract optimal 2D rotation angle
             double dTheta = Math.atan2(h01 - h10, h00 + h11);
             double cosT = Math.cos(dTheta);
             double sinT = Math.sin(dTheta);
 
-            // Compute translation step
             double stepDx = cdX - (cosT * csX - sinT * csY);
             double stepDy = cdY - (sinT * csX + cosT * csY);
 
-            // Update running source points
             for (Point2D p : currSrc) {
                 double rx = cosT * p.x - sinT * p.y + stepDx;
                 double ry = sinT * p.x + cosT * p.y + stepDy;
@@ -302,37 +293,60 @@ public class DriveTrain extends SubsystemBase
      * Updates global pose estimated from successive LiDAR scan frames.
      */
     private double lastEncoderDistance = 0.0;
-    private static final double ENCODER_MOTION_THRESHOLD_METERS = 0.002; // 2 mm physical movement required
+    private static final double ENCODER_MOTION_THRESHOLD_METERS = 0.002; // 2 mm threshold
+    private double lastYaw = 0.0;
 
     private void updateLidarOdometry() {
         if (scanData == null) return;
-
+    
         List<Point2D> currentPoints = extractLocalScanPoints(scanData);
         if (currentPoints.size() < 10) return;
 
-        if (prevScanPoints != null && prevScanPoints.size() >= 10) {
-            // 1. Calculate physical wheel movement since last frame
-            double currentEncoderDistance = getAverageForwardEncoderDistance();
-            double encoderDelta = Math.abs(currentEncoderDistance - lastEncoderDistance);
+        // Calculate physical wheel displacement across all 3 drive encoders
+        double currentEncoderDist = (Math.abs(getLeftEncoderDistance()) 
+                                   + Math.abs(getRightEncoderDistance()) 
+                                   + Math.abs(getBackEncoderDistance())) / 3.0;
+        double encDelta = Math.abs(currentEncoderDist - lastEncoderDistance);
 
-            // 2. Only run ICP pose integration if the physical wheels actually moved
-            if (encoderDelta >= ENCODER_MOTION_THRESHOLD_METERS) {
-                Transform2D step = icp2D(currentPoints, prevScanPoints, 20, 1e-4);
+        double currentYaw = getYaw();
+        double deltaYawDeg = normalizeAngle(currentYaw - lastYaw);
 
-                lidarPoseHeading = getYaw();
-                double headingRad = Math.toRadians(lidarPoseHeading);
-
-                double dxGlobal = step.dx * Math.sin(headingRad) + step.dy * Math.cos(headingRad);
-                double dyGlobal = step.dx * Math.cos(headingRad) + step.dy * Math.sin(headingRad);
-
-                lidarPoseX += dxGlobal * 2;
-                lidarPoseY += dyGlobal * 2;
-
-                lastEncoderDistance = currentEncoderDistance;
-            }
+        // 2. Only run ICP pose integration if the physical wheels or heading actually moved
+        if (encDelta < ENCODER_MOTION_THRESHOLD_METERS && Math.abs(deltaYawDeg) < 0.2) {
+            prevScanPoints = currentPoints;
+            lastYaw = currentYaw;
+            lastEncoderDistance = currentEncoderDist;
+            return;
         }
-
+    
+        if (prevScanPoints != null && prevScanPoints.size() >= 10) {
+            double deltaYawRad = Math.toRadians(deltaYawDeg);
+    
+            List<Point2D> alignedPoints = new ArrayList<>();
+            double cosD = Math.cos(deltaYawRad);
+            double sinD = Math.sin(deltaYawRad);
+    
+            for (Point2D p : currentPoints) {
+                double rx = p.x * cosD - p.y * sinD;
+                double ry = p.y * cosD + p.x * sinD;
+                alignedPoints.add(new Point2D(rx, ry));
+            }
+    
+            Transform2D step = icp2D(alignedPoints, prevScanPoints, 10, 1e-3);
+    
+            lidarPoseHeading = currentYaw;
+            double headingRad = Math.toRadians(lidarPoseHeading);
+    
+            double dxGlobal = step.dx * Math.sin(headingRad) + step.dy * Math.cos(headingRad);
+            double dyGlobal = step.dx * Math.cos(headingRad) + step.dy * Math.sin(headingRad);
+    
+            lidarPoseX -= dxGlobal * 2;
+            lidarPoseY -= dyGlobal * 2;
+        }
+    
         prevScanPoints = currentPoints;
+        lastYaw = currentYaw;
+        lastEncoderDistance = currentEncoderDist;
     }
 
     // ============================================================
@@ -407,6 +421,7 @@ public class DriveTrain extends SubsystemBase
         lidarPoseY = 0.0;
         lidarPoseHeading = 0.0;
         prevScanPoints = null;
+        lastEncoderDistance = 0.0;
     }
 
     // ============================================================
@@ -418,8 +433,11 @@ public class DriveTrain extends SubsystemBase
         processNetworkTableDrive();
 
         if (scanning) {
-            scanData = lidar.getData();
-            updateLidarOdometry();
+            Lidar.ScanData currentScan = lidar.getData();
+            if (currentScan != null) {
+                scanData = currentScan;
+                updateLidarOdometry();
+            }
         }
 
         if (controlTable.getEntry("ResetNavX").getBoolean(false)) {
@@ -449,9 +467,13 @@ public class DriveTrain extends SubsystemBase
         driveTable.getEntry("PoseY").setDouble(lidarPoseY);
         driveTable.getEntry("PoseHeading").setDouble(getYaw());
 
-        // Stream raw scan parts for dashboard mapping
-        if (scanning && scanData != null && scanData.distance != null && scanData.angle != null) {
-            int length = Math.min(scanData.distance.length, scanData.angle.length);
+        // Stream raw scan parts
+        Lidar.ScanData streamScan = scanData;
+        if (scanning && streamScan != null && streamScan.distance != null && streamScan.angle != null) {
+            float[] distances = streamScan.distance;
+            float[] angles = streamScan.angle;
+            int length = Math.min(distances.length, angles.length);
+
             if (length > 0) {
                 int mid = length / 2;
                 int len2 = length - mid;
@@ -459,15 +481,15 @@ public class DriveTrain extends SubsystemBase
                 double[] angles1 = new double[mid];
                 double[] distances1 = new double[mid];
                 for (int i = 0; i < mid; i++) {
-                    angles1[i] = scanData.angle[i] - LIDAR_OFFSET_DEGREES;
-                    distances1[i] = scanData.distance[i];
+                    angles1[i] = angles[i] - LIDAR_OFFSET_DEGREES;
+                    distances1[i] = distances[i];
                 }
 
                 double[] angles2 = new double[len2];
                 double[] distances2 = new double[len2];
                 for (int i = 0; i < len2; i++) {
-                    angles2[i] = scanData.angle[mid + i] - LIDAR_OFFSET_DEGREES;
-                    distances2[i] = scanData.distance[mid + i];
+                    angles2[i] = angles[mid + i] - LIDAR_OFFSET_DEGREES;
+                    distances2[i] = distances[mid + i];
                 }
 
                 lidarTable.getEntry("ScanAngles_Part1").setDoubleArray(angles1);
