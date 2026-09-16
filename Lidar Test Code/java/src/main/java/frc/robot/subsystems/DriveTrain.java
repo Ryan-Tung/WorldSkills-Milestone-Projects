@@ -69,6 +69,7 @@ public class DriveTrain extends SubsystemBase
     private Lidar.ScanData scanData;
     public boolean scanning = false;
     private static final double LIDAR_OFFSET_DEGREES = 13.0; // Physical offset to the right
+    private static final double LIDAR_OFFSET_Y_METERS = 0.175; // 17.5 cm forward of center
 
     private List<Point2D> prevScanPoints = null;
     private double lidarPoseX = 0.0;
@@ -194,7 +195,7 @@ public class DriveTrain extends SubsystemBase
                 
                 double angleRad = Math.toRadians(angleDeg);
                 double lx = distMeters * Math.sin(angleRad);
-                double ly = distMeters * Math.cos(angleRad);
+                double ly = distMeters * Math.cos(angleRad) + LIDAR_OFFSET_Y_METERS;
                 points.add(new Point2D(lx, ly));
             }
         }
