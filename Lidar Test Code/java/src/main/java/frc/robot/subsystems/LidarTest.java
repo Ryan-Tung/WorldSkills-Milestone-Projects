@@ -13,7 +13,7 @@ public class LidarTest extends SubsystemBase {
     public boolean scanning = true;
 
     public LidarTest() {
-        lidar = new Lidar(Lidar.Port.kUSB2);
+        lidar = new Lidar(Lidar.Port.kUSB1);
 
         lidar.clusterConfig(50.0f, 5);
         lidar.enableFilter(Lidar.Filter.kCLUSTER, false);

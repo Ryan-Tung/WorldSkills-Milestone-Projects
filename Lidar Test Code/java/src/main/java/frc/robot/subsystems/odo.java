@@ -77,7 +77,7 @@
 //         // --------------------------------------------------------
 //         // LIDAR
 //         // --------------------------------------------------------
-//         lidar = new Lidar(Lidar.Port.kUSB2);
+//         lidar = new Lidar(Lidar.Port.kUSB1);
 //         lidar.clusterConfig(50.0f, 5);
 //         lidar.enableFilter(Lidar.Filter.kCLUSTER, false);
 
