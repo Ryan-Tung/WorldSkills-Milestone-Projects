@@ -400,7 +400,9 @@ public class DriveTrain extends SubsystemBase
         if (!scanning) return;
 
         scanData = lidar.getData();
-        if (scanData != null && scanData.distance != null && scanData.angle != null) {
+        // if (scanData != null && scanData.distance != null && scanData.angle != null) {
+        if (false) {
+
             int length = Math.min(scanData.distance.length, scanData.angle.length);
             if (length > 0) {
                 int mid = length / 2;
