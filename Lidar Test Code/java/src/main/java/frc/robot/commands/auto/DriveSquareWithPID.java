@@ -3,8 +3,10 @@ package frc.robot.commands.auto;
 import edu.wpi.first.wpilibj2.command.InstantCommand;
 import edu.wpi.first.wpilibj2.command.SequentialCommandGroup;
 import edu.wpi.first.wpilibj2.command.WaitCommand;
+import frc.robot.commands.driveCommands.AlignToCornerWithLidar;
 import frc.robot.commands.driveCommands.DriveWithPID;
 import frc.robot.commands.driveCommands.TurnWithPID;
+import frc.robot.commands.driveCommands.TurnToHeadingWithPID;
 import frc.robot.subsystems.DriveTrain;
 import frc.robot.subsystems.NetPrinter_v2;
 
@@ -55,26 +57,24 @@ public class DriveSquareWithPID extends AutoCommand {
             );
         }
 
-        // 5. Drive back into the corner (reverse clear step)
+        // 5. Drive back into general corner region (reverse clear step)
         addCommands(
-            new InstantCommand(() -> NetPrinter_v2.printf("LidarLog", "EVENT: STEP 5 - REVERSING BACK INTO CORNER")),
-            new DriveWithPID(-500, 1, 0, 1).withTimeout(2),
+            new InstantCommand(() -> NetPrinter_v2.printf("LidarLog", "EVENT: STEP 5 - REVERSING BACK NEAR CORNER REGION")),
+            new DriveWithPID(-500, 10, 0, 10).withTimeout(20),
             new WaitCommand(WAIT_TIME)
         );
 
-        // 6. Turn back to 0 degrees heading so 0 deg and 270 deg LiDAR face corner walls
+        // 6. Return to original rotation (0 degrees heading) so 0 deg and 270 deg LiDAR sensors face corner walls
         addCommands(
-            new InstantCommand(() -> NetPrinter_v2.printf("LidarLog", "EVENT: STEP 6 - TURNING 180 DEGREES TO FACE CORNER WALLS")),
-            new TurnWithPID(0, 10, 180, 1).withTimeout(2),
+            new InstantCommand(() -> NetPrinter_v2.printf("LidarLog", "EVENT: STEP 6 - ROTATING BACK TO ORIGINAL YAW (0 DEGREES)")),
+            new TurnToHeadingWithPID(0, 1).withTimeout(20),
             new WaitCommand(WAIT_TIME)
         );
 
-        // 7. Relocalize with LiDAR to fix accumulated odometry drift
+        // 7. Closed-loop LiDAR alignment back to baseline distance readings & odometry reset
         addCommands(
-            new InstantCommand(() -> {
-                NetPrinter_v2.printf("LidarLog", "EVENT: STEP 7 - RELOCALIZING FROM CORNER WALLS");
-                driveTrain.relocalizeFromCorner();
-            }, driveTrain)
+            new InstantCommand(() -> NetPrinter_v2.printf("LidarLog", "EVENT: STEP 7 - ALIGNING TO ORIGINAL CORNER POSITION VIA LIDAR READINGS")),
+            new AlignToCornerWithLidar().withTimeout(10)
         );
     }
 }

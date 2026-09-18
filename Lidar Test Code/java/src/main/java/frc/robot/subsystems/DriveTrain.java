@@ -168,13 +168,19 @@ public class DriveTrain extends SubsystemBase
     }
 
     public double getLidarAtZeroDegrees() {
-        if (scanData == null || scanData.distance == null || scanData.angle == null) return 999.0;
+        if (scanData == null || scanData.distance == null || scanData.angle == null) {
+            NetPrinter_v2.printf("LidarLog", "ERROR: scanData is NULL or empty array!");
+            return 999.0;
+        }
         int length = Math.min(scanData.distance.length, scanData.angle.length);
-        if (length == 0) return 999.0;
-
+        if (length == 0) {
+            NetPrinter_v2.printf("LidarLog", "ERROR: Scan array length is 0!");
+            return 999.0;
+        }
+    
         double minDiff = Double.MAX_VALUE;
         double distanceAt0 = 999.0;
-
+    
         for (int i = 0; i < length; i++) {
             double angle = scanData.angle[i];
             double diff = Math.min(Math.abs(angle - 0.0), Math.abs(angle - 360.0));
@@ -183,6 +189,8 @@ public class DriveTrain extends SubsystemBase
                 distanceAt0 = scanData.distance[i] / 10.0;
             }
         }
+    
+        NetPrinter_v2.printf("LidarLog", "LIDAR 0 DEG READ: %.2f CM (angle diff: %.2f deg)", distanceAt0, minDiff);
         return distanceAt0;
     }
 
@@ -190,18 +198,36 @@ public class DriveTrain extends SubsystemBase
         if (scanData == null || scanData.distance == null || scanData.angle == null) return 999.0;
         int length = Math.min(scanData.distance.length, scanData.angle.length);
         if (length == 0) return 999.0;
-
+    
         double minDiff = Double.MAX_VALUE;
         double distanceAt270 = 999.0;
-
+    
         for (int i = 0; i < length; i++) {
+            double rawDist = scanData.distance[i];
+            
+            // 1. Ignore invalid distance flags (0, -1, or negative readings)
+            if (rawDist <= 0) continue;
+    
             double angle = scanData.angle[i];
+            
+            // 2. Normalize negative angles to [0, 360) range if SDK uses [-180, 180]
+            if (angle < 0) {
+                angle += 360.0;
+            }
+    
             double diff = Math.abs(angle - 270.0);
-            if (diff < minDiff) {
+            
+            // 3. Keep closest valid beam within a 15-degree search window
+            if (diff < minDiff && diff < 15.0) {
                 minDiff = diff;
-                distanceAt270 = scanData.distance[i] / 10.0;
+                distanceAt270 = rawDist / 10.0; // Convert mm to cm
             }
         }
+    
+        if (distanceAt270 == 999.0) {
+            NetPrinter_v2.printf("LidarLog", "WARNING: No valid LiDAR readings found near 270 degrees!");
+        }
+    
         return distanceAt270;
     }
 
@@ -221,16 +247,22 @@ public class DriveTrain extends SubsystemBase
      * Measures corner distances at 0 deg (Y) and 270 deg (X) to initialize starting position.
      */
     public boolean calibrateCornerPosition() {
+        resetYaw();
         startScan();
         double dist0 = getLidarAtZeroDegrees();
         double dist270 = getLidarAt270Degrees();
-
+    
+        NetPrinter_v2.printf("LidarLog", "DEBUG CALIBRATE: dist0=%.2f CM | dist270=%.2f CM", dist0, dist270);
+    
         if (dist0 < 900.0 && dist270 < 900.0) {
             initialCornerX = dist270;
             initialCornerY = dist0;
             setPose(initialCornerX, initialCornerY);
+            NetPrinter_v2.printf("LidarLog", "CALIBRATION SUCCESS: Baseline X=%.2f CM, Baseline Y=%.2f CM", initialCornerX, initialCornerY);
             return true;
         }
+        
+        NetPrinter_v2.printf("LidarLog", "CALIBRATION FAILED: Invalid readings (Out of range or scanData null)");
         return false;
     }
 
