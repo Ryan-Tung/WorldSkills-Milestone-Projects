@@ -124,12 +124,12 @@ public class AlignToCornerWithLidar extends CommandBase {
 
         // Drive axis only when a new frame update is confirmed
         if (yUpdated && lastValidY > 0.0) {
-            double rawY = -pidYAxis.calculate(lastValidY, targetDistY); // Direction sign fixed
-            yOutput = MathUtil.clamp(addFrictionCompensation(rawY, pidYAxis.atSetpoint()), -0.20, 0.20);
+            double rawY = -pidYAxis.calculate(lastValidY, targetDistY); // Inverted to back away when too close
+            yOutput = MathUtil.clamp(addFrictionCompensation(rawY, pidYAxis.atSetpoint()), -0.90, 0.90);
         }
 
         if (xUpdated && lastValidX > 0.0) {
-            double rawX = pidXAxis.calculate(lastValidX, targetDistX); // Direction sign fixed
+            double rawX = pidXAxis.calculate(lastValidX, targetDistX); // Positive output drives right (away from 270Deg wall)
             xOutput = MathUtil.clamp(addFrictionCompensation(rawX, pidXAxis.atSetpoint()), -0.90, 0.90);
         }
 
