@@ -410,7 +410,7 @@ public class DriveTrain extends SubsystemBase
     public double getLeftEncoderDistance() { return leftEncoder.getEncoderDistance() * -1; }
     public double getRightEncoderDistance() { return rightEncoder.getEncoderDistance() * -1; }
     public double getBackEncoderDistance() { return backEncoder.getEncoderDistance(); }
-    public double getYaw() { return -navx.getYaw(); }
+    public double getYaw() { return navx.getYaw(); }
 
     private double normalizeAngle(double angle) {
         while (angle > 180.0) angle -= 360.0;
@@ -513,3 +513,22 @@ public class DriveTrain extends SubsystemBase
         }
     }
 }
+
+
+
+
+
+Mapping must be autommatic
+
+Bang against wall for calibration
+
+use ir tape for calibration
+
+
+
+
+
+
+hear me out. spin until get smth within range of 0 and 270.
+
+dont reset yaw. you'll need that.

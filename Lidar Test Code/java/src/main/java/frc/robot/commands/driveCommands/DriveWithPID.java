@@ -28,16 +28,17 @@ public class DriveWithPID extends CommandBase
         pidYAxis = new PIDController(0.01, 0.0, 0);
         pidYAxis.setTolerance(epsilonDistance);
 
-        pidZAxis = new PIDController(0.01, 0.0, 0);
+        pidZAxis = new PIDController(0.0001, 0.0, 0);
 
         pidZAxis.setTolerance(epsilonYaw);
+        pidZAxis.enableContinuousInput(-180.0, 180.0); // Handles +/- 180 degree boundary smoothly
     }
 
     @Override
     public void initialize()
     {
         drive.resetEncoders();
-        drive.resetYaw();
+        // drive.resetYaw();
         pidYAxis.reset();
         pidZAxis.reset();
     }
