@@ -1,7 +1,6 @@
 package frc.robot.commands.driveCommands;
 
 import edu.wpi.first.wpilibj.controller.PIDController;
-import edu.wpi.first.wpilibj.smartdashboard.SmartDashboard;
 import edu.wpi.first.wpilibj2.command.CommandBase;
 import edu.wpi.first.wpiutil.math.MathUtil;
 import frc.robot.RobotContainer;
@@ -14,11 +13,22 @@ public class AlignToCornerWithLidar extends CommandBase {
     private double targetDistY;
     private double targetDistX;
 
+    private double lastValidY = -1.0;
+    private double lastValidX = -1.0;
+
+    // Tracks raw readings to detect stale frame data
+    private double prevRawY = -1.0;
+    private double prevRawX = -1.0;
+
     private final PIDController pidYAxis;
     private final PIDController pidXAxis;
     private final PIDController pidZAxis;
 
-    private static final double MIN_OUTPUT = 0.06; // Minimum 6% power to overcome static friction
+    private static final double MIN_OUTPUT = 0.50; // Minimum power threshold below max clamp
+    private static final double MAX_ALLOWED_JUMP = 15.0; // Filters corner reflection jumps
+
+    private int atSetpointTicks = 0;
+    private static final int REQUIRED_SETPOINT_TICKS = 5; // Requires 100ms (5 x 20ms) stable setpoint hold
 
     public AlignToCornerWithLidar(double distanceTolerance, double yawTolerance) {
         addRequirements(drive);
@@ -29,12 +39,13 @@ public class AlignToCornerWithLidar extends CommandBase {
         pidXAxis = new PIDController(0.015, 0.0, 0.001);
         pidXAxis.setTolerance(distanceTolerance);
 
-        pidZAxis = new PIDController(0.01, 0.0, 0.0);
+        pidZAxis = new PIDController(0.012, 0.0, 0.0);
         pidZAxis.setTolerance(yawTolerance);
+        pidZAxis.enableContinuousInput(-180.0, 180.0);
     }
 
     public AlignToCornerWithLidar() {
-        this(1.0, 1.0);
+        this(0.5, 0.5);
     }
 
     private double normalizeAngle(double angle) {
@@ -47,7 +58,6 @@ public class AlignToCornerWithLidar extends CommandBase {
         return angle;
     }
 
-    // Applies minimum power threshold to prevent friction stalling
     private double addFrictionCompensation(double pidOutput, boolean atSetpoint) {
         if (atSetpoint || Math.abs(pidOutput) < 0.001) {
             return 0.0;
@@ -58,8 +68,19 @@ public class AlignToCornerWithLidar extends CommandBase {
 
     @Override
     public void initialize() {
+        drive.startScan();
+
         targetDistY = drive.getInitialCornerY();
         targetDistX = drive.getInitialCornerX();
+
+        if (targetDistY <= 0.0) targetDistY = drive.getExactLidarReading(0.0);
+        if (targetDistX <= 0.0) targetDistX = drive.getExactLidarReading(270.0);
+
+        lastValidY = -1.0;
+        lastValidX = -1.0;
+        prevRawY = -1.0;
+        prevRawX = -1.0;
+        atSetpointTicks = 0;
 
         pidYAxis.reset();
         pidXAxis.reset();
@@ -70,30 +91,54 @@ public class AlignToCornerWithLidar extends CommandBase {
 
     @Override
     public void execute() {
-        double currentDist0 = drive.getLidarAtZeroDegrees();
-        double currentDist270 = drive.getLidarAt270Degrees();
+        double raw0 = drive.getExactLidarReading(0.0);
+        double raw270 = drive.getExactLidarReading(270.0);
+
+        boolean yUpdated = false;
+        boolean xUpdated = false;
+
+        // Verify Y-axis reading freshness
+        if (raw0 > 0.0 && raw0 < 800.0) {
+            if (Double.compare(raw0, prevRawY) != 0) { // New frame received
+                if (lastValidY < 0.0 || Math.abs(raw0 - lastValidY) <= MAX_ALLOWED_JUMP) {
+                    lastValidY = raw0;
+                    yUpdated = true;
+                }
+                prevRawY = raw0;
+            }
+        }
+
+        // Verify X-axis reading freshness
+        if (raw270 > 0.0 && raw270 < 800.0) {
+            if (Double.compare(raw270, prevRawX) != 0) { // New frame received
+                if (lastValidX < 0.0 || Math.abs(raw270 - lastValidX) <= MAX_ALLOWED_JUMP) {
+                    lastValidX = raw270;
+                    xUpdated = true;
+                }
+                prevRawX = raw270;
+            }
+        }
 
         double yOutput = 0.0;
         double xOutput = 0.0;
 
-        // Process Y axis (0 deg LiDAR) if reading is valid
-        if (currentDist0 > 0.0 && currentDist0 < 900.0) {
-            double rawY = -pidYAxis.calculate(currentDist0, targetDistY);
-            yOutput = MathUtil.clamp(addFrictionCompensation(rawY, pidYAxis.atSetpoint()), -0.25, 0.25);
+        // Drive axis only when a new frame update is confirmed
+        if (yUpdated && lastValidY > 0.0) {
+            double rawY = -pidYAxis.calculate(lastValidY, targetDistY); // Direction sign fixed
+            yOutput = MathUtil.clamp(addFrictionCompensation(rawY, pidYAxis.atSetpoint()), -0.20, 0.20);
         }
 
-        // Process X axis (270 deg LiDAR) if reading is valid
-        if (currentDist270 > 0.0 && currentDist270 < 900.0 && targetDistX > 0.0) {
-            double rawX = -pidXAxis.calculate(currentDist270, targetDistX);
-            xOutput = MathUtil.clamp(addFrictionCompensation(rawX, pidXAxis.atSetpoint()), -0.25, 0.25);
+        if (xUpdated && lastValidX > 0.0) {
+            double rawX = pidXAxis.calculate(lastValidX, targetDistX); // Direction sign fixed
+            xOutput = MathUtil.clamp(addFrictionCompensation(rawX, pidXAxis.atSetpoint()), -0.90, 0.90);
         }
 
         double angleError = normalizeAngle(0.0 - drive.getYaw());
         double rawZ = pidZAxis.calculate(0.0, angleError);
-        double zOutput = MathUtil.clamp(rawZ, -0.2, 0.2);
+        double zOutput = MathUtil.clamp(rawZ, -0.15, 0.15);
 
-        NetPrinter_v2.printf("LidarLog", "EXEC Align: 0Deg=%.2f (Tgt=%.2f, Y_Out=%.3f) | 270Deg=%.2f (Tgt=%.2f, X_Out=%.3f) | Yaw=%.2f",
-            currentDist0, targetDistY, yOutput, currentDist270, targetDistX, xOutput, drive.getYaw());
+        NetPrinter_v2.printf("LidarLog", "EXEC Align: 0Deg=%.2f (Tgt=%.2f, Y_Out=%.3f, Fresh=%b) | 270Deg=%.2f (Tgt=%.2f, X_Out=%.3f, Fresh=%b) | Yaw=%.2f",
+            lastValidY, targetDistY, yOutput, yUpdated, lastValidX, targetDistX, xOutput, xUpdated, drive.getYaw());
 
         drive.holonomicDrive(xOutput, yOutput, zOutput);
     }
@@ -109,8 +154,16 @@ public class AlignToCornerWithLidar extends CommandBase {
 
     @Override
     public boolean isFinished() {
-        // If X reading is invalid (-0.10), finish based on Y axis and heading alignment alone
-        boolean xFinished = (targetDistX <= 0.0) || pidXAxis.atSetpoint();
-        return pidYAxis.atSetpoint() && xFinished && pidZAxis.atSetpoint();
+        boolean yFinished = (lastValidY > 0.0) && pidYAxis.atSetpoint();
+        boolean xFinished = (targetDistX <= 0.0) || ((lastValidX > 0.0) && pidXAxis.atSetpoint());
+        boolean zFinished = pidZAxis.atSetpoint();
+
+        if (yFinished && xFinished && zFinished) {
+            atSetpointTicks++;
+        } else {
+            atSetpointTicks = 0;
+        }
+
+        return atSetpointTicks >= REQUIRED_SETPOINT_TICKS;
     }
 }

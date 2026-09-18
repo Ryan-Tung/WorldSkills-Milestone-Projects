@@ -15,8 +15,11 @@ import edu.wpi.first.wpilibj.shuffleboard.Shuffleboard;
 import edu.wpi.first.wpilibj.shuffleboard.ShuffleboardTab;
 import edu.wpi.first.wpilibj.smartdashboard.SmartDashboard;
 import edu.wpi.first.wpilibj2.command.SubsystemBase;
+import edu.wpi.first.wpilibj.RobotController;
+import edu.wpi.first.wpilibj.Timer;
 
 import frc.robot.Constants;
+import frc.robot.Robot;
 
 public class DriveTrain extends SubsystemBase
 {
@@ -70,6 +73,9 @@ public class DriveTrain extends SubsystemBase
     // Corner calibration baselines
     private double initialCornerX = 0.0;
     private double initialCornerY = 0.0;
+    public void setInitialCornerY(double y) { this.initialCornerY = y; }
+public void setInitialCornerX(double x) { this.initialCornerX = x; }
+
 
     public DriveTrain()
     {
@@ -104,6 +110,47 @@ public class DriveTrain extends SubsystemBase
     // ============================================================
     // COBRA CONTROL & CALIBRATION
     // ============================================================
+
+    // Fetches the exact ray closest to targetAngle within 0.5 degrees
+public double getExactLidarReading(double targetAngle) {
+    if (scanData == null || scanData.distance == null || scanData.angle == null) return -1.0;
+    int length = Math.min(scanData.distance.length, scanData.angle.length);
+    if (length == 0) return -1.0;
+
+    double minDiff = Double.MAX_VALUE;
+    double bestDistance = -1.0;
+
+    for (int i = 0; i < length; i++) {
+        double rawDist = scanData.distance[i];
+        if (rawDist <= 0) continue; // Ignore invalid/zero distance flags
+
+        double angle = scanData.angle[i];
+        if (angle < 0) angle += 360.0;
+
+        double diff = Math.abs(angle - targetAngle);
+        if (diff > 180.0) diff = 360.0 - diff; // Handle 0/360 boundary
+
+        // Match the exact ray closest to target angle within 0.5 degrees
+        if (diff < minDiff && diff < 0.25) {
+            minDiff = diff;
+            bestDistance = rawDist / 10.0; // mm to cm
+        }
+    }
+    return bestDistance;
+}
+
+// Calibration Retry: Polls LiDAR repeatedly up to a timeout until a valid reading arrives
+public double getBlockingLidarReading(double targetAngle, double timeoutSeconds) {
+    double startTime = RobotController.getFPGATime() / 1e6;
+    while ((RobotController.getFPGATime() / 1e6) - startTime < timeoutSeconds) {
+        double reading = getExactLidarReading(targetAngle);
+        if (reading > 0.0) {
+            return reading; // Valid reading found!
+        }
+        Timer.delay(0.01); // Pause 10ms to let new LiDAR packets arrive
+    }
+    return -1.0; // Failed to get reading within timeout
+}
 
     public float getCobraVoltage(int channel) {
         if (channel < 0 || channel >= 4) return 0.0f;
@@ -218,7 +265,7 @@ public class DriveTrain extends SubsystemBase
             double diff = Math.abs(angle - 270.0);
             
             // 3. Keep closest valid beam within a 15-degree search window
-            if (diff < minDiff && diff < 15.0) {
+            if (diff < minDiff && diff < 1.0) {
                 minDiff = diff;
                 distanceAt270 = rawDist / 10.0; // Convert mm to cm
             }

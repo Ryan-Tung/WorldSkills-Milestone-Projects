@@ -4,6 +4,7 @@ import edu.wpi.first.wpilibj2.command.InstantCommand;
 import edu.wpi.first.wpilibj2.command.SequentialCommandGroup;
 import edu.wpi.first.wpilibj2.command.WaitCommand;
 import frc.robot.commands.driveCommands.AlignToCornerWithLidar;
+import frc.robot.commands.driveCommands.CalibrateCornerCommand;
 import frc.robot.commands.driveCommands.DriveWithPID;
 import frc.robot.commands.driveCommands.TurnWithPID;
 import frc.robot.commands.driveCommands.TurnToHeadingWithPID;
@@ -22,10 +23,8 @@ public class DriveSquareWithPID extends AutoCommand {
 
         // 1. Log initialization & calibrate initial pose using LiDAR corner walls
         addCommands(
-            new InstantCommand(() -> {
-                NetPrinter_v2.printf("LidarLog", "EVENT: AUTO SQUARE SEQUENCE INITIALIZED");
-                driveTrain.calibrateCornerPosition();
-            }, driveTrain),
+            new InstantCommand(() -> NetPrinter_v2.printf("LidarLog", "EVENT: AUTO SQUARE SEQUENCE INITIALIZED")),
+            new CalibrateCornerCommand(),
             new WaitCommand(WAIT_TIME)
         );
 
@@ -74,7 +73,7 @@ public class DriveSquareWithPID extends AutoCommand {
         // 7. Closed-loop LiDAR alignment back to baseline distance readings & odometry reset
         addCommands(
             new InstantCommand(() -> NetPrinter_v2.printf("LidarLog", "EVENT: STEP 7 - ALIGNING TO ORIGINAL CORNER POSITION VIA LIDAR READINGS")),
-            new AlignToCornerWithLidar().withTimeout(10)
+            new AlignToCornerWithLidar().withTimeout(100)
         );
     }
 }
