@@ -380,7 +380,7 @@ public double getBlockingLidarReading(double targetAngle, double timeoutSeconds)
     public double getBackEncoderDistance() { return backEncoder.getEncoderDistance(); }
     public double getAverageForwardEncoderDistance() { return (getLeftEncoderDistance() - getRightEncoderDistance()) / 2.0; }
 
-    public double getYaw() { return navx.getYaw(); }
+    public double getYaw() { return navx.getFusedHeading(); }
 
     private double normalizeAngle(double angle) {
         while (angle > 180.0) angle -= 360.0;
